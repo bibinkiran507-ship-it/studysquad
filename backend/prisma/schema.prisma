@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String         @id @default(uuid())
+  email            String         @unique
+  password         String
+  name             String
+  avatar           String?        @default("")
+  bio              String?        @default("")
+  pomodoroSessions Int            @default(0)
+  isEmailVerified  Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  ownedSquads      Squad[]        @relation("SquadOwner")
+  memberships      SquadMember[]
+  messages         Message[]
+  tasks            Task[]
+  resources        Resource[]
+  passwordResets   PasswordReset[]
+  studyEvents      StudyEvent[]
+}
+
+model Squad {
+  id              String        @id @default(uuid())
+  name            String
+  category        String
+  subject         String
+  description     String
+  platform        String        @default("Discord")
+  meetingUrl      String?       @default("")
+  schedule        String        @default("Mon, Wed, Fri • 8:00 PM EST")
+  maxMembers      Int           @default(6)
+  bannerGradient  String        @default("from-cyan-500/20 to-blue-500/20")
+  sharedNotes     String?       @default("")
+  pinnedMessage   String?       @default("")
+  ownerId         String
+  owner           User          @relation("SquadOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members         SquadMember[]
+  tasks           Task[]
+  messages        Message[]
+  resources       Resource[]
+  events          StudyEvent[]
+  createdAt       DateTime      @default(now())
+}
+
+model SquadMember {
+  id       String   @id @default(uuid())
+  userId   String
+  squadId  String
+  role     String   @default("member")   // "admin" | "member"
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  squad    Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  joinedAt DateTime @default(now())
+
+  @@unique([userId, squadId])
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  squadId     String
+  squad       Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  text        String
+  completed   Boolean  @default(false)
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  squadId    String
+  squad      Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content    String
+  isPinned   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model Resource {
+  id          String   @id @default(uuid())
+  squadId     String
+  squad       Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  title       String
+  url         String
+  category    String   @default("Resource")
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model StudyEvent {
+  id          String    @id @default(uuid())
+  title       String
+  description String?   @default("")
+  type        String    @default("session") // "session" | "exam" | "deadline" | "review"
+  subject     String?   @default("General")
+  date        DateTime
+  endDate     DateTime?
+  squadId     String?
+  squad       Squad?    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location    String?   @default("StudySquad Room")
+  meetingUrl  String?   @default("")
+  urgency     String    @default("medium") // "low" | "medium" | "high" | "critical"
+  isCompleted Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+}
