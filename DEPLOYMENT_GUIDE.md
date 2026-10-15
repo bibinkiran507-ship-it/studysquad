@@ -45,11 +45,11 @@ git push -u origin main
    * **Root Directory**: `backend` (or leave empty if using root commands)
    * **Build Command**:
      ```bash
-     npm install && npm run build && cd backend && npm install && npm run prisma:push
+     npm install && npm run build && cd backend && npm install && npm run prisma:push && npm run prisma:seed
      ```
    * **Start Command**:
      ```bash
-     node server.js
+     npm start
      ```
 4. Add **Environment Variables** in Render:
    * `NODE_ENV`: `production`

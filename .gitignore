@@ -18,9 +18,12 @@ dist-ssr
 
 # Environment & Secrets (NEVER push to git)
 .env
-.env.*
-*.env
+.env.local
+.env.*.local
 backend/.env
+backend/.env.local
+!*.example
+!**/.env.example
 
 # Local SQLite databases (Ephemeral)
 backend/prisma/*.db

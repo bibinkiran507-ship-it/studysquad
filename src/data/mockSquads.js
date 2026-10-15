@@ -22,7 +22,7 @@ export const INITIAL_SQUADS = [
     tasks: [
       { id: 't1', text: 'Solve 2 Medium Binary Search problems', completed: true },
       { id: 't2', text: 'Review Dynamic Programming memoization patterns', completed: false },
-      { id: 't3', text: 'Mock interview session with Aarav', completed: false },
+      { id: 't3', text: 'Peer mock interview & algorithmic review', completed: false },
     ],
   },
   {
