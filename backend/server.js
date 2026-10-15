@@ -114,6 +114,18 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Serve compiled frontend in production if dist/ directory exists
+const distPath = path.join(__dirname, '..', 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(distPath, 'index.html'));
+    }
+  });
+}
+
+
 // In-Memory Presence Tracker: squadId -> Map<socketId, { id, name, avatar, joinedAt }>
 const activeSquadPresence = new Map();
 // Socket ID to squad/user mapping: socketId -> { squadId, user }
