@@ -54,34 +54,19 @@ export default function UpgradeProModal({ isOpen, onClose }) {
     try {
       // 1. Create order on backend
       const res = await paymentAPI.createOrder(selectedPlan);
-      const { orderId, amount, currency, keyId, isTestMode } = res.data;
+      const { orderId, amount, currency, keyId } = res.data;
 
       // 2. Load Razorpay script
       const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        setError('Failed to load Razorpay payment SDK. Please check your internet connection.');
+        setLoading(false);
+        return;
+      }
 
-      // Open official Razorpay Checkout popup whenever a valid key is provided
-      const hasConfiguredKey = keyId && (keyId.startsWith('rzp_test_') || keyId.startsWith('rzp_live_'));
-
-      if (!scriptLoaded || (!hasConfiguredKey && isTestMode)) {
-        // Fallback simulator for development / test mode
-        console.log('⚡ Using Razorpay instant verification simulator');
-        const verifyRes = await paymentAPI.verifyPayment({
-          razorpay_order_id: orderId,
-          razorpay_payment_id: `pay_sim_${Date.now()}`,
-          razorpay_signature: 'test_signature',
-          plan: selectedPlan,
-          isDemoSimulation: true,
-        });
-
-        if (verifyRes.data.success) {
-          if (setUser) setUser(verifyRes.data.user);
-          if (refreshUser) await refreshUser();
-          setSuccess(true);
-          setTimeout(() => {
-            setSuccess(false);
-            onClose();
-          }, 2400);
-        }
+      if (!keyId || (!keyId.startsWith('rzp_test_') && !keyId.startsWith('rzp_live_'))) {
+        setError('Payment gateway is not configured yet. Please configure Razorpay keys in backend/.env to accept payments.');
+        setLoading(false);
         return;
       }
 

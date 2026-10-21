@@ -50,27 +50,27 @@ router.post('/create-order', requireAuth, async (req, res) => {
     }
 
     const rzp = getRazorpayInstance();
-    let orderId = '';
-    const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_demo_studysquad';
-
-    if (rzp) {
-      // Real Razorpay Order Creation
-      const order = await rzp.orders.create({
-        amount: selectedPlan.amount,
-        currency: selectedPlan.currency,
-        receipt: `rcpt_${req.user.id.slice(0, 8)}_${Date.now()}`,
-        notes: {
-          userId: req.user.id,
-          userName: req.user.name,
-          plan,
-        },
+    if (!rzp) {
+      return res.status(400).json({
+        error: 'Razorpay payment gateway is not configured yet. Please add your RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env to start accepting payments.',
+        notConfigured: true,
       });
-      orderId = order.id;
-    } else {
-      // Demo / Test Mode Sandbox Order
-      orderId = `order_test_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      console.log(`ℹ️ [Razorpay Sandbox Mode] Created mock order ${orderId} for ${req.user.name}`);
     }
+
+    const keyId = process.env.RAZORPAY_KEY_ID;
+
+    // Real Razorpay Order Creation
+    const order = await rzp.orders.create({
+      amount: selectedPlan.amount,
+      currency: selectedPlan.currency,
+      receipt: `rcpt_${req.user.id.slice(0, 8)}_${Date.now()}`,
+      notes: {
+        userId: req.user.id,
+        userName: req.user.name,
+        plan,
+      },
+    });
+    const orderId = order.id;
 
     // Save payment order record in database
     await prisma.paymentOrder.create({
@@ -91,7 +91,6 @@ router.post('/create-order', requireAuth, async (req, res) => {
       keyId,
       plan,
       planName: selectedPlan.name,
-      isTestMode: !rzp,
     });
   } catch (error) {
     console.error('Create payment order error:', error);
@@ -107,29 +106,25 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
       razorpay_payment_id,
       razorpay_signature,
       plan = 'monthly',
-      isDemoSimulation = false,
     } = req.body;
 
-    if (!razorpay_order_id) {
-      return res.status(400).json({ error: 'Missing order ID for verification.' });
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Missing payment details or signature for verification.' });
     }
 
     const selectedPlan = PLANS[plan] || PLANS.monthly;
     const secret = process.env.RAZORPAY_KEY_SECRET;
 
-    // Signature verification logic
-    let isValid = false;
-
-    if (secret && razorpay_signature && !secret.includes('YOUR_')) {
-      const generatedSignature = crypto
-        .createHmac('sha256', secret)
-        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-        .digest('hex');
-      isValid = generatedSignature === razorpay_signature;
-    } else {
-      // In sandbox / developer test mode, approve simulated checkout
-      isValid = true;
+    if (!secret || secret.includes('YOUR_')) {
+      return res.status(400).json({ error: 'Razorpay gateway secret is not configured.' });
     }
+
+    // Cryptographic signature verification
+    const generatedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+    const isValid = generatedSignature === razorpay_signature;
 
     if (!isValid) {
       // Mark order failed in DB
