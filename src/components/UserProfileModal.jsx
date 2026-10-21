@@ -19,6 +19,7 @@ import {
   Sparkles,
   Trophy,
   Flame,
+  Crown,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../api/client';
@@ -197,7 +198,14 @@ export default function UserProfileModal() {
               </div>
 
               <div className="pb-1">
-                <h2 className="text-white font-bold text-xl leading-tight">{user.name}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-white font-bold text-xl leading-tight">{user.name}</h2>
+                  {user.isPro && (
+                    <span className="px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-neutral-950 text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                      <Crown size={10} /> PRO
+                    </span>
+                  )}
+                </div>
                 <p className="text-white/60 text-sm flex items-center gap-1 mt-0.5">
                   <Mail size={11} />
                   {user.email}

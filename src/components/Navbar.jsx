@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, LogOut, User as UserIcon, Calendar as CalendarIcon } from 'lucide-react';
+import { Plus, LogOut, User as UserIcon, Calendar as CalendarIcon, Crown } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { GoogleIcon } from './AuthModal';
 
-export default function Navbar({ onOpenCreateModal, onOpenCalendarModal }) {
+export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenProModal }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { user, logout, openAuthModal, openProfile } = useAuth();
 
@@ -118,6 +118,24 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal }) {
               className="text-sm font-semibold text-neutral-800 hover:text-black px-3.5 py-2 rounded-full hover:bg-white/40 transition-all cursor-pointer"
             >
               Sign In
+            </button>
+          )}
+
+          {/* Pro Upgrade / Pro Member Badge */}
+          {user?.isPro ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-neutral-950 text-xs font-black shadow-xs">
+              <Crown className="w-3.5 h-3.5 text-neutral-950" />
+              <span>PRO MEMBER</span>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenProModal}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500/15 via-yellow-500/15 to-amber-500/15 border border-amber-400/60 hover:border-amber-400 text-xs sm:text-sm font-bold text-amber-900 hover:text-amber-950 shadow-xs transition-all cursor-pointer hover:scale-102"
+              title="Unlock Unlimited AI Tutor, PDF Chat & Private Squads"
+            >
+              <Crown className="w-4 h-4 text-amber-600" />
+              <span>Upgrade to Pro</span>
             </button>
           )}
 

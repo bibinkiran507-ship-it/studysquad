@@ -59,6 +59,9 @@ router.post('/register', async (req, res) => {
         bio: true,
         pomodoroSessions: true,
         isEmailVerified: true,
+        isPro: true,
+        proPlan: true,
+        proExpiresAt: true,
         createdAt: true
       }
     });
@@ -106,6 +109,9 @@ router.post('/login', async (req, res) => {
         bio: user.bio,
         pomodoroSessions: user.pomodoroSessions,
         isEmailVerified: user.isEmailVerified,
+        isPro: user.isPro || false,
+        proPlan: user.proPlan || '',
+        proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt
       }
     });
@@ -201,6 +207,9 @@ router.post('/google', async (req, res) => {
         bio: user.bio || '',
         pomodoroSessions: user.pomodoroSessions || 0,
         isEmailVerified: user.isEmailVerified,
+        isPro: user.isPro || false,
+        proPlan: user.proPlan || '',
+        proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt,
         provider: 'google',
       }
@@ -225,6 +234,9 @@ router.get('/me', requireAuth, async (req, res) => {
         bio: true,
         pomodoroSessions: true,
         isEmailVerified: true,
+        isPro: true,
+        proPlan: true,
+        proExpiresAt: true,
         createdAt: true,
         _count: {
           select: { memberships: true, ownedSquads: true }

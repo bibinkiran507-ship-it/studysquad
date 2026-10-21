@@ -127,6 +127,13 @@ export const eventsAPI = {
   getAiStudyPlan: (params) => client.post('/events/ai-study-plan', params),
 };
 
+// Payment & Pro Subscription Endpoints
+export const paymentAPI = {
+  createOrder: (plan) => client.post('/payment/create-order', { plan }),
+  verifyPayment: (data) => client.post('/payment/verify-payment', data),
+  getStatus: () => client.get('/payment/status'),
+};
+
 // Helper to resolve relative file/upload URLs to the active backend origin
 export const getFileUrl = (url) => {
   if (!url) return '';

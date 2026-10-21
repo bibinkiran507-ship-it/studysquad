@@ -8,6 +8,7 @@ import SquadDirectory from './components/SquadDirectory';
 import SquadRoomModal from './components/SquadRoomModal';
 import CreateSquadModal from './components/CreateSquadModal';
 import StudyCalendarModal from './components/StudyCalendarModal';
+import UpgradeProModal from './components/UpgradeProModal';
 import HowItWorks from './components/HowItWorks';
 import Footer from './components/Footer';
 import ScrollProgress from './components/ScrollProgress';
@@ -38,6 +39,7 @@ function AppInner() {
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+  const [isProModalOpen, setIsProModalOpen] = useState(false);
   const [activeSquadRoom, setActiveSquadRoom] = useState(null);
 
   // Subscribe to real-time global presence for active student counts
@@ -318,6 +320,7 @@ function AppInner() {
       <Navbar
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenCalendarModal={() => setIsCalendarModalOpen(true)}
+        onOpenProModal={() => setIsProModalOpen(true)}
       />
 
       {/* Hero Section Container */}
@@ -402,6 +405,12 @@ function AppInner() {
         onClose={() => setIsCalendarModalOpen(false)}
         squads={squads}
         onOpenSquadRoom={(squad) => setActiveSquadRoom(squad)}
+      />
+
+      {/* StudySquad Pro Upgrade & Payment Modal */}
+      <UpgradeProModal
+        isOpen={isProModalOpen}
+        onClose={() => setIsProModalOpen(false)}
       />
 
       {/* Squad Room Modal with Real-time Chat & Synced Pomodoro */}

@@ -9,6 +9,7 @@ import authRoutes from './routes/auth.js';
 import squadRoutes from './routes/squads.js';
 import aiRoutes, { getGeminiModel, generateWithGemini } from './routes/ai.js';
 import eventsRoutes from './routes/events.js';
+import paymentRoutes from './routes/payment.js';
 import prisma from './lib/prisma.js';
 
 import path from 'path';
@@ -103,6 +104,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/squads', squadRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/events', eventsRoutes);
+app.use('/api/payment', paymentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
