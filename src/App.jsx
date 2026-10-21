@@ -422,6 +422,7 @@ function AppInner() {
         onAddTask={handleAddTask}
         globalPresence={globalPresence}
         onLeaveSquad={handleLeaveSquad}
+        onOpenProModal={() => setIsProModalOpen(true)}
       />
     </div>
   );

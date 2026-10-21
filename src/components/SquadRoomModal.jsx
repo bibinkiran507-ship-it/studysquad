@@ -86,6 +86,7 @@ export default function SquadRoomModal({
   onAddTask,
   globalPresence = {},
   onLeaveSquad,
+  onOpenProModal,
 }) {
   const { user, openAuthModal } = useAuth();
 
@@ -444,6 +445,15 @@ export default function SquadRoomModal({
 
   // AI Suggest Goals
   const handleSuggestGoals = async () => {
+    if (!user) {
+      openAuthModal('register');
+      return;
+    }
+    if (!user.isPro) {
+      if (onOpenProModal) onOpenProModal();
+      return;
+    }
+
     setIsSuggestingGoals(true);
     try {
       const res = await aiAPI.suggestGoals(squad.name, squad.subject, squad.category);
@@ -458,7 +468,7 @@ export default function SquadRoomModal({
 
   const handleAddSuggestedGoal = (goal) => {
     if (!user) {
-      openAuthModal('login');
+      openAuthModal('register');
       return;
     }
     onAddTask(squad.id, goal);
@@ -467,6 +477,15 @@ export default function SquadRoomModal({
 
   // Squad AI Copilot quick actions (Summarize Notes & Generate Agenda)
   const handleRunAiCopilot = async (mode) => {
+    if (!user) {
+      openAuthModal('register');
+      return;
+    }
+    if (!user.isPro) {
+      if (onOpenProModal) onOpenProModal();
+      return;
+    }
+
     setIsAiCopilotLoading(true);
     setAiCopilotResult(null);
     try {
@@ -645,9 +664,15 @@ export default function SquadRoomModal({
             >
               <Brain className="w-4 h-4" />
               <span>AI Quiz & Cards</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-bold border border-violet-500/30">
-                AI
-              </span>
+              {user?.isPro ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30 flex items-center gap-0.5">
+                  <Sparkles className="w-2.5 h-2.5" /> PRO
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/40 flex items-center gap-0.5">
+                  <Crown className="w-2.5 h-2.5 text-amber-400" /> PRO
+                </span>
+              )}
             </button>
 
             <button
@@ -1150,6 +1175,7 @@ export default function SquadRoomModal({
                       user={user}
                       socket={socket}
                       openAuthModal={openAuthModal}
+                      onOpenProModal={onOpenProModal}
                     />
                   </Suspense>
                 </TabPanel>
@@ -1163,6 +1189,7 @@ export default function SquadRoomModal({
                       user={user}
                       socket={socket}
                       openAuthModal={openAuthModal}
+                      onOpenProModal={onOpenProModal}
                     />
                   </Suspense>
                 </TabPanel>

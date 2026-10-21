@@ -405,8 +405,7 @@ function GenericResourceCard({ res, user, squad, onDelete, onChatWithDoc }) {
   );
 }
 
-// ── Interactive Document AI Chat Modal ──
-function DocumentAiModal({ doc, squad, user, onClose }) {
+function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthModal }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -425,6 +424,24 @@ function DocumentAiModal({ doc, squad, user, onClose }) {
   const handleAsk = async (queryText) => {
     const q = (queryText || inputQuery).trim();
     if (!q || isLoading) return;
+
+    if (!user) {
+      if (openAuthModal) openAuthModal('register');
+      return;
+    }
+
+    if (!user.isPro) {
+      if (onOpenProModal) onOpenProModal();
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: q },
+        {
+          role: 'assistant',
+          content: '🔒 **StudySquad Pro Feature**: Chatting with lecture slide decks and PDFs is unlocked for Pro members.\n\nPlease **Upgrade to StudySquad Pro (₹199/mo)** to unlock unlimited Google Gemini AI lecture document analysis.',
+        }
+      ]);
+      return;
+    }
 
     const userMsg = { role: 'user', content: q };
     setMessages((prev) => [...prev, userMsg]);
@@ -595,7 +612,7 @@ function DocumentAiModal({ doc, squad, user, onClose }) {
   );
 }
 
-export default function ResourceHub({ squad, user, socket, openAuthModal }) {
+export default function ResourceHub({ squad, user, socket, openAuthModal, onOpenProModal }) {
   // Sub-tabs: 'notes' | 'resources' | 'slides'
   const [activeSubTab, setActiveSubTab] = useState("slides");
   const [activeDocChat, setActiveDocChat] = useState(null);
@@ -1363,6 +1380,8 @@ export default function ResourceHub({ squad, user, socket, openAuthModal }) {
           squad={squad}
           user={user}
           onClose={() => setActiveDocChat(null)}
+          onOpenProModal={onOpenProModal}
+          openAuthModal={openAuthModal}
         />
       )}
     </div>

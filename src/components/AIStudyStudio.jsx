@@ -22,10 +22,13 @@ import {
   GraduationCap,
   Award,
   Zap,
+  Crown,
+  Lock,
+  ArrowRight,
 } from 'lucide-react';
 import { aiAPI, squadsAPI } from '../api/client';
 
-export default function AIStudyStudio({ squad, user, socket, openAuthModal }) {
+export default function AIStudyStudio({ squad, user, socket, openAuthModal, onOpenProModal }) {
   // Mode: 'flashcards' | 'quiz'
   const [mode, setMode] = useState('flashcards');
 
@@ -709,6 +712,16 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
   // Generate either Flashcards or Quiz
   const handleGenerate = async (targetMode = mode) => {
+    if (!user) {
+      if (openAuthModal) openAuthModal('register');
+      return;
+    }
+
+    if (!user.isPro) {
+      if (onOpenProModal) onOpenProModal();
+      return;
+    }
+
     setIsGenerating(true);
     setStatusMessage('');
     setIsFlipped(false);
@@ -897,6 +910,61 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
   return (
     <div className="space-y-6">
+      {/* ─── PRO REQUIREMENT WARNING / SIGN ─── */}
+      {(!user || !user.isPro) && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border-2 border-amber-400/60 shadow-xl shadow-amber-500/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 flex items-center justify-center font-black shadow-md shrink-0">
+              <Crown className="w-6 h-6 text-neutral-950" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm sm:text-base font-extrabold text-white">
+                  StudySquad Pro Feature
+                </h4>
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-400 text-neutral-950 shadow-xs">
+                  PRO REQUIRED
+                </span>
+              </div>
+              <p className="text-xs text-neutral-300 mt-0.5 max-w-xl">
+                {!user
+                  ? 'Sign in and upgrade to StudySquad Pro to generate unlimited custom AI flashcards & practice exam quizzes.'
+                  : 'You are on the Free Plan. Upgrade to StudySquad Pro to generate unlimited Google Gemini AI flashcards, quizzes & active recall decks.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (!user) {
+                openAuthModal?.('register');
+              } else {
+                onOpenProModal?.();
+              }
+            }}
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-neutral-950 font-black text-xs sm:text-sm shrink-0 shadow-md shadow-amber-500/20 transition-all cursor-pointer hover:scale-102 flex items-center justify-center gap-2"
+          >
+            <Crown className="w-4 h-4 text-neutral-950" />
+            <span>{!user ? 'Sign In to Unlock Pro' : 'Upgrade to Pro (₹199/mo)'}</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ─── PRO UNLOCKED BADGE (Shown ONLY when user is Pro) ─── */}
+      {user?.isPro && (
+        <div className="px-4 py-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300">
+          <span className="flex items-center gap-2 font-bold">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            StudySquad Pro Active • Unlimited Gemini AI Flashcards & Exam Quizzes Unlocked
+          </span>
+          <span className="text-[10px] uppercase font-black bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+            VIP Unlimited
+          </span>
+        </div>
+      )}
+
       {/* ─── Mode Switcher Header ─── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white/5 border border-white/10">
         <div>
@@ -924,7 +992,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             type="button"
             onClick={() => {
               setMode('flashcards');
-              if (flashcards.length === 0) handleGenerate('flashcards');
+              if (user?.isPro && flashcards.length === 0) handleGenerate('flashcards');
             }}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
               mode === 'flashcards'
@@ -939,7 +1007,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             type="button"
             onClick={() => {
               setMode('quiz');
-              if (quizQuestions.length === 0) handleGenerate('quiz');
+              if (user?.isPro && quizQuestions.length === 0) handleGenerate('quiz');
             }}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
               mode === 'quiz'
@@ -1007,12 +1075,21 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             type="button"
             disabled={isGenerating}
             onClick={() => handleGenerate()}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer disabled:opacity-50"
+            className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50 ${
+              !user || !user.isPro
+                ? 'bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-neutral-950 shadow-amber-500/20 hover:scale-102'
+                : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 shadow-emerald-500/20'
+            }`}
           >
             {isGenerating ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 <span>AI Generating...</span>
+              </>
+            ) : !user || !user.isPro ? (
+              <>
+                <Crown className="w-4 h-4 text-neutral-950" />
+                <span>Upgrade to Pro to Generate</span>
               </>
             ) : (
               <>
@@ -1191,12 +1268,42 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 </div>
               </div>
             </>
+          ) : !user || !user.isPro ? (
+            <div className="text-center py-12 px-6 rounded-3xl border-2 border-amber-500/40 bg-gradient-to-b from-amber-500/15 via-neutral-900 to-black space-y-4 max-w-lg mx-auto shadow-2xl">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 flex items-center justify-center font-black mx-auto shadow-lg">
+                <Crown className="w-9 h-9 text-neutral-950" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-400 text-neutral-950 inline-block mb-2">
+                  PRO LOCKED
+                </span>
+                <h5 className="text-xl font-black text-white">AI Flashcards Studio</h5>
+                <p className="text-xs text-neutral-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                  Turn squad notes and coursework for <strong>{squad?.subject || 'your exams'}</strong> into intelligent 3D active recall decks with Google Gemini AI.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!user) {
+                    openAuthModal?.('register');
+                  } else {
+                    onOpenProModal?.();
+                  }
+                }}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-neutral-950 font-black text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition-all cursor-pointer hover:scale-102 flex items-center justify-center gap-2"
+              >
+                <Crown className="w-4 h-4 text-neutral-950" />
+                <span>{!user ? 'Sign In to Unlock Pro' : 'Unlock with Pro (₹199/mo)'}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           ) : (
             <div className="text-center py-12 px-4 rounded-3xl border border-dashed border-white/15 bg-white/5 space-y-3">
               <Layers className="w-10 h-10 text-neutral-500 mx-auto" />
-              <h5 className="text-sm font-bold text-white">No Flashcards Generated Yet</h5>
+              <h5 className="text-sm font-bold text-white">Ready to Generate Flashcards</h5>
               <p className="text-xs text-neutral-400 max-w-sm mx-auto">
-                Click the "Generate Flashcards" button above to turn your squad notes into interactive flashcards.
+                Click the "Generate Flashcards" button above to turn your notes into smart study cards.
               </p>
             </div>
           )}
@@ -1391,12 +1498,42 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 </div>
               </motion.div>
             )
+          ) : !user || !user.isPro ? (
+            <div className="text-center py-12 px-6 rounded-3xl border-2 border-violet-500/40 bg-gradient-to-b from-violet-500/15 via-neutral-900 to-black space-y-4 max-w-lg mx-auto shadow-2xl">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 flex items-center justify-center font-black mx-auto shadow-lg">
+                <Crown className="w-9 h-9 text-neutral-950" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-400 text-neutral-950 inline-block mb-2">
+                  PRO LOCKED
+                </span>
+                <h5 className="text-xl font-black text-white">AI Practice Quiz Generator</h5>
+                <p className="text-xs text-neutral-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                  Generate instant 5-question multiple choice quizzes with auto-scoring and in-depth explanations powered by Google Gemini AI.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!user) {
+                    openAuthModal?.('register');
+                  } else {
+                    onOpenProModal?.();
+                  }
+                }}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-neutral-950 font-black text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition-all cursor-pointer hover:scale-102 flex items-center justify-center gap-2"
+              >
+                <Crown className="w-4 h-4 text-neutral-950" />
+                <span>{!user ? 'Sign In to Unlock Pro' : 'Unlock with Pro (₹199/mo)'}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           ) : (
             <div className="text-center py-12 px-4 rounded-3xl border border-dashed border-white/15 bg-white/5 space-y-3">
               <HelpCircle className="w-10 h-10 text-neutral-500 mx-auto" />
-              <h5 className="text-sm font-bold text-white">No Quiz Available Yet</h5>
+              <h5 className="text-sm font-bold text-white">Ready to Generate Practice Quiz</h5>
               <p className="text-xs text-neutral-400 max-w-sm mx-auto">
-                Click "Generate Quiz" above to create a 5-question exam simulation based on your study material.
+                Click "Generate Quiz" above to create an exam simulation based on your study material.
               </p>
             </div>
           )}
