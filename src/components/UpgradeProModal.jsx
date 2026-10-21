@@ -18,7 +18,7 @@ import { useAuth } from '../context/AuthContext';
 import { paymentAPI } from '../api/client';
 
 export default function UpgradeProModal({ isOpen, onClose }) {
-  const { user, updateUser, openAuthModal } = useAuth();
+  const { user, setUser, refreshUser, openAuthModal } = useAuth();
   const [selectedPlan, setSelectedPlan] = useState('yearly'); // 'monthly' | 'yearly'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -71,7 +71,8 @@ export default function UpgradeProModal({ isOpen, onClose }) {
         });
 
         if (verifyRes.data.success) {
-          updateUser(verifyRes.data.user);
+          if (setUser) setUser(verifyRes.data.user);
+          if (refreshUser) await refreshUser();
           setSuccess(true);
           setTimeout(() => {
             setSuccess(false);
@@ -107,7 +108,8 @@ export default function UpgradeProModal({ isOpen, onClose }) {
             });
 
             if (verifyRes.data.success) {
-              updateUser(verifyRes.data.user);
+              if (setUser) setUser(verifyRes.data.user);
+              if (refreshUser) await refreshUser();
               setSuccess(true);
               setTimeout(() => {
                 setSuccess(false);
@@ -237,6 +239,13 @@ export default function UpgradeProModal({ isOpen, onClose }) {
               <span className="text-[11px] font-black text-neutral-950 bg-amber-400 px-3 py-1 rounded-full uppercase tracking-wider self-start sm:self-center shrink-0 shadow-xs">
                 Active
               </span>
+            </div>
+          )}
+
+          {/* Error Alert Banner */}
+          {error && (
+            <div className="p-3 mb-6 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-semibold text-center flex items-center justify-center gap-2">
+              <span>⚠️ {error}</span>
             </div>
           )}
 
