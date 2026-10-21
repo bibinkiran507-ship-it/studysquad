@@ -218,10 +218,25 @@ export default function UpgradeProModal({ isOpen, onClose }) {
             </motion.div>
           )}
 
-          {/* Error banner */}
-          {error && (
-            <div className="p-3 mb-6 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-medium text-center">
-              {error}
+          {/* Active Pro Member Banner */}
+          {user?.isPro && (
+            <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border border-amber-400/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 flex items-center justify-center font-bold shadow-sm shrink-0">
+                  <Crown className="w-5 h-5 text-neutral-950" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-amber-200">
+                    Active StudySquad Pro Member
+                  </h4>
+                  <p className="text-xs text-neutral-300">
+                    Current Plan: <span className="font-semibold text-white capitalize">{user.proPlan || 'Annual'}</span> • All premium AI & priority rooms unlocked.
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] font-black text-neutral-950 bg-amber-400 px-3 py-1 rounded-full uppercase tracking-wider self-start sm:self-center shrink-0 shadow-xs">
+                Active
+              </span>
             </div>
           )}
 
@@ -315,7 +330,7 @@ export default function UpgradeProModal({ isOpen, onClose }) {
               <>
                 <Crown className="w-5 h-5 text-amber-950" />
                 <span>
-                  Upgrade to Pro • {selectedPlan === 'yearly' ? '₹999 / Year' : '₹199 / Month'}
+                  {user?.isPro ? 'Renew / Switch Plan' : 'Upgrade to Pro'} • {selectedPlan === 'yearly' ? '₹999 / Year' : '₹199 / Month'}
                 </span>
                 <ArrowRight className="w-4 h-4" />
               </>

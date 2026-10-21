@@ -123,10 +123,15 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
 
           {/* Pro Upgrade / Pro Member Badge */}
           {user?.isPro ? (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-neutral-950 text-xs font-black shadow-xs">
+            <button
+              type="button"
+              onClick={onOpenProModal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-neutral-950 text-xs font-black shadow-xs transition-all cursor-pointer hover:scale-102"
+              title="Click to view Pro plan details & active benefits"
+            >
               <Crown className="w-3.5 h-3.5 text-neutral-950" />
               <span>PRO MEMBER</span>
-            </span>
+            </button>
           ) : (
             <button
               type="button"

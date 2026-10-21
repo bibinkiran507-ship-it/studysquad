@@ -24,7 +24,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../api/client';
 
-export default function UserProfileModal() {
+export default function UserProfileModal({ onOpenProModal }) {
   const { user, isProfileOpen, closeProfile, updateProfile, logout, openAuthModal } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -226,6 +226,58 @@ export default function UserProfileModal() {
                 <p className="text-[10px] text-neutral-500 mt-0.5 leading-tight">{label}</p>
               </div>
             ))}
+          </div>
+
+          {/* Membership Status Bar */}
+          <div className="px-6 mb-3">
+            <div
+              className={`p-3 rounded-2xl flex items-center justify-between border ${
+                user.isPro
+                  ? 'bg-gradient-to-r from-amber-500/10 via-yellow-500/10 to-amber-500/10 border-amber-400/40'
+                  : 'bg-neutral-50 border-neutral-200'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    user.isPro
+                      ? 'bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 shadow-xs'
+                      : 'bg-neutral-200 text-neutral-700'
+                  }`}
+                >
+                  <Crown size={15} />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-neutral-900 flex items-center gap-1.5">
+                    {user.isPro ? 'StudySquad Pro Active' : 'Free Student Plan'}
+                    {user.isPro && (
+                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded-full capitalize">
+                        {user.proPlan || 'Annual'}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-neutral-500">
+                    {user.isPro
+                      ? 'All premium AI & priority rooms unlocked'
+                      : 'Upgrade for unlimited AI tutor & perks'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  closeProfile();
+                  if (onOpenProModal) onOpenProModal();
+                }}
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shrink-0 ${
+                  user.isPro
+                    ? 'bg-amber-400 hover:bg-amber-300 text-neutral-950 shadow-xs hover:scale-102'
+                    : 'bg-[#1C2E1E] hover:bg-[#2A442D] text-white shadow-xs hover:scale-102'
+                }`}
+              >
+                {user.isPro ? 'View Plans' : 'Upgrade to Pro'}
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}

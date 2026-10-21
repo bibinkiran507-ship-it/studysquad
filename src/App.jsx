@@ -314,7 +314,7 @@ function AppInner() {
       <AuthModal />
 
       {/* User Profile Modal */}
-      <UserProfileModal />
+      <UserProfileModal onOpenProModal={() => setIsProModalOpen(true)} />
 
       {/* Transparent Sticky Navbar */}
       <Navbar
