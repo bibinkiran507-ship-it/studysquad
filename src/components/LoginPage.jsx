@@ -86,10 +86,14 @@ export default function LoginPage() {
         setSuccess('Welcome back! Loading your squads…');
       }
     } catch (err) {
-      setError(
-        err.response?.data?.error ||
-        'Authentication failed. Please check your credentials.'
-      );
+      if (!err.response) {
+        setError('Cannot connect to backend server. Make sure the backend is running on port 3001 (npm run backend).');
+      } else {
+        setError(
+          err.response?.data?.error ||
+          'Authentication failed. Please check your credentials.'
+        );
+      }
     } finally {
       setLoading(false);
     }

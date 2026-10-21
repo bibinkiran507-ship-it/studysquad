@@ -94,6 +94,123 @@ function getClientFallbackFlashcards(subject = '', category = '', topic = '') {
         tag: 'Focus'
       }
     ];
+  } else if (key.includes('java')) {
+    return [
+      {
+        id: 'fc-1',
+        front: 'What are the 4 fundamental pillars of OOP in Java?',
+        back: '1. Encapsulation (data hiding via private fields and getters/setters). 2. Inheritance (reusability via extends). 3. Polymorphism (overloading & overriding). 4. Abstraction (hiding implementation via abstract classes/interfaces).',
+        tag: 'Java OOPs'
+      },
+      {
+        id: 'fc-2',
+        front: 'What is the internal working of HashMap in Java?',
+        back: 'HashMap uses an array of Node buckets. key.hashCode() determines bucket index. Collisions are handled via linked lists; when bucket exceeds 8 nodes, it converts into a Red-Black Tree for O(log n) lookup.',
+        tag: 'Java Collections'
+      },
+      {
+        id: 'fc-3',
+        front: 'What is the difference between Comparable and Comparator in Java?',
+        back: 'Comparable (compareTo) provides a single natural sorting order implemented by the class itself. Comparator (compare) allows multiple custom external sorting strategies.',
+        tag: 'Java Core'
+      },
+      {
+        id: 'fc-4',
+        front: 'How does the Java 8 Streams API operate?',
+        back: 'Streams process sequences of elements functionally using intermediate operations (lazy: filter, map, sorted) and terminal operations (eager: collect, forEach, reduce).',
+        tag: 'Java Streams'
+      },
+      {
+        id: 'fc-5',
+        front: 'What is the difference between synchronized blocks and volatile keyword?',
+        back: 'volatile guarantees visibility of variable updates across threads without CPU caching. synchronized guarantees both mutual exclusion (atomicity) and visibility.',
+        tag: 'Concurrency'
+      },
+      {
+        id: 'fc-6',
+        front: 'What is Dependency Injection in Spring Boot?',
+        back: 'A design pattern where an object’s dependencies are provided by the Spring IoC container (@Autowired / constructor injection) rather than constructed directly with `new`.',
+        tag: 'Spring Boot'
+      }
+    ];
+  } else if (key.includes('python')) {
+    return [
+      {
+        id: 'fc-1',
+        front: 'What is the difference between mutable and immutable data types in Python?',
+        back: 'Immutable (int, float, str, tuple, frozenset) cannot be modified in-place once created. Mutable (list, dict, set) can be altered without creating new memory references.',
+        tag: 'Python Core'
+      },
+      {
+        id: 'fc-2',
+        front: 'What is a Python Generator and how does yield work?',
+        back: 'Generators produce values on the fly one at a time using yield, preserving local state and enabling lazy memory-efficient iteration over massive datasets.',
+        tag: 'Python Performance'
+      },
+      {
+        id: 'fc-3',
+        front: 'What does the Global Interpreter Lock (GIL) in CPython do?',
+        back: 'A mutex that prevents multiple native threads from executing Python bytecodes concurrently, ensuring thread-safe memory management at the expense of multi-core CPU bound threading.',
+        tag: 'CPython Internals'
+      },
+      {
+        id: 'fc-4',
+        front: 'What is the advantage of NumPy array vectorization over standard Python loops?',
+        back: 'NumPy operations are executed in pre-compiled C loops on contiguous memory blocks with SIMD vectorization, executing up to 50-100x faster than interpreted Python loops.',
+        tag: 'NumPy & SciPy'
+      },
+      {
+        id: 'fc-5',
+        front: 'What is the difference between loc and iloc in Pandas?',
+        back: 'loc is label/name-based indexing, whereas iloc is integer position-based indexing (0-indexed).',
+        tag: 'Pandas'
+      },
+      {
+        id: 'fc-6',
+        front: 'How does a Python Decorator function operate?',
+        back: 'A decorator is a higher-order function that takes another function as an argument, wraps its behavior, and returns a new callable without altering the original function source code.',
+        tag: 'Python Advanced'
+      }
+    ];
+  } else if (key.includes('ai') || key.includes('intelligence') || key.includes('machine learning') || key.includes('neural')) {
+    return [
+      {
+        id: 'fc-1',
+        front: 'What is Gradient Descent and why is learning rate critical?',
+        back: 'An optimization algorithm that iteratively steps in the direction of steepest negative gradient of the loss function. Too high learning rate overshoots; too low converges too slowly.',
+        tag: 'Deep Learning'
+      },
+      {
+        id: 'fc-2',
+        front: 'What is the difference between Overfitting and Underfitting?',
+        back: 'Overfitting occurs when a model memorizes training noise and fails to generalize (high variance). Underfitting occurs when the model is too simple to capture patterns (high bias).',
+        tag: 'Model Evaluation'
+      },
+      {
+        id: 'fc-3',
+        front: 'How does Self-Attention work in the Transformer architecture?',
+        back: 'Each token computes Query (Q), Key (K), and Value (V) projections: Attention(Q,K,V) = softmax(QKᵀ / √dₖ) V, allowing tokens to dynamically weight contextual relationships across the entire sequence.',
+        tag: 'LLMs & Transformers'
+      },
+      {
+        id: 'fc-4',
+        front: 'What is Retrieval-Augmented Generation (RAG)?',
+        back: 'A framework that retrieves relevant external context documents from a vector database using semantic similarity search, augmenting the LLM prompt to eliminate hallucinations.',
+        tag: 'Generative AI'
+      },
+      {
+        id: 'fc-5',
+        front: 'Why are Convolutional Layers (CNNs) superior for computer vision compared to Dense layers?',
+        back: 'CNNs utilize shared weight kernels and spatial translation invariance, drastically reducing parameter counts while capturing localized spatial hierarchies (edges -> textures -> objects).',
+        tag: 'Computer Vision'
+      },
+      {
+        id: 'fc-6',
+        front: 'What is the role of Activation Functions like ReLU in Neural Networks?',
+        back: 'Activation functions introduce non-linearity, enabling deep neural networks to approximate arbitrary non-linear mathematical decision boundaries.',
+        tag: 'Neural Networks'
+      }
+    ];
   } else if (key.includes('leet') || key.includes('algo') || key.includes('code') || key.includes('cs') || key.includes('computer')) {
     return [
       {
@@ -131,6 +248,45 @@ function getClientFallbackFlashcards(subject = '', category = '', topic = '') {
         front: 'What is the average vs worst-case complexity of QuickSort?',
         back: 'Average: O(n log n) with balanced pivots. Worst: O(n²) when the pivot chosen is consistently the smallest or largest element.',
         tag: 'Sorting'
+      }
+    ];
+  } else if (key.includes('cbse') || key.includes('12th')) {
+    return [
+      {
+        id: 'fc-1',
+        front: 'What is Gauss’s Law in Electrostatics (CBSE Physics)?',
+        back: 'The total electric flux through any closed Gaussian surface is equal to 1/ε₀ times the total enclosed charge: ∮ E·dA = q_enclosed / ε₀.',
+        tag: 'CBSE Physics'
+      },
+      {
+        id: 'fc-2',
+        front: 'What is the condition for an Aldol Condensation reaction (CBSE Chemistry)?',
+        back: 'Aldehydes or ketones containing at least one α-hydrogen atom undergo condensation in the presence of dilute alkali (NaOH) to form β-hydroxy carbonyl compounds.',
+        tag: 'CBSE Chemistry'
+      },
+      {
+        id: 'fc-3',
+        front: 'What is the formula for the shortest distance between two skew lines in 3D Geometry?',
+        back: 'd = |(a₂ - a₁) · (b₁ × b₂)| / |b₁ × b₂|, where a₁ and a₂ are points on the lines and b₁, b₂ are direction vectors.',
+        tag: 'CBSE Maths'
+      },
+      {
+        id: 'fc-4',
+        front: 'What are the three structural genes of the Lac Operon and their enzymes?',
+        back: 'lacZ encodes β-galactosidase, lacY encodes permease, and lacA encodes transacetylase.',
+        tag: 'CBSE Biology'
+      },
+      {
+        id: 'fc-5',
+        front: 'What is the difference between pickle.dump() and pickle.load() in Python CBSE CS?',
+        back: 'pickle.dump(obj, file) writes/serializes an object to a binary file. pickle.load(file) deserializes and reads it back into Python memory.',
+        tag: 'CBSE CS'
+      },
+      {
+        id: 'fc-6',
+        front: 'How is Cash Flow from Operating Activities adjusted for working capital changes?',
+        back: 'Add: Decrease in Current Assets & Increase in Current Liabilities. Deduct: Increase in Current Assets & Decrease in Current Liabilities.',
+        tag: 'CBSE Commerce'
       }
     ];
   } else {
@@ -240,6 +396,150 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         explanation: 'If you cannot explain a concept simply, you do not understand it well enough. Teaching reveals exact hidden blind spots.'
       }
     ];
+  } else if (key.includes('java')) {
+    return [
+      {
+        id: 'q-1',
+        question: 'Which Java Collection class guarantees elements are stored in ascending sorted order?',
+        options: ['HashSet', 'TreeSet', 'LinkedHashSet', 'ArrayList'],
+        answerIndex: 1,
+        explanation: 'TreeSet is backed by a Red-Black Tree and guarantees that elements are maintained in sorted order (via Comparable or Comparator).'
+      },
+      {
+        id: 'q-2',
+        question: 'What is the default initial capacity and load factor of a Java HashMap?',
+        options: ['Capacity 8, Load Factor 0.5', 'Capacity 16, Load Factor 0.75', 'Capacity 32, Load Factor 1.0', 'Capacity 10, Load Factor 0.8'],
+        answerIndex: 1,
+        explanation: 'Default initial capacity is 16 and the default load factor is 0.75, which offers an optimal balance between time and space.'
+      },
+      {
+        id: 'q-3',
+        question: 'In Java, what happens when a class implements an interface containing a default method?',
+        options: [
+          'The class MUST override the default method or it will not compile',
+          'The class inherits the default implementation without being forced to override it',
+          'Interfaces cannot have method bodies in any version of Java',
+          'The method automatically becomes private'
+        ],
+        answerIndex: 1,
+        explanation: 'Default methods (introduced in Java 8) allow interface evolution with backward compatibility, providing concrete implementations that classes can inherit or override.'
+      },
+      {
+        id: 'q-4',
+        question: 'Which Spring Boot annotation is used to inject bean dependencies into a class?',
+        options: ['@Component', '@Autowired', '@Entity', '@Repository'],
+        answerIndex: 1,
+        explanation: '@Autowired triggers Spring Dependency Injection to supply the required matching bean from the ApplicationContext.'
+      },
+      {
+        id: 'q-5',
+        question: 'What is the time complexity of searching an element in a balanced Java TreeMap?',
+        options: ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)'],
+        answerIndex: 1,
+        explanation: 'TreeMap is implemented using a self-balancing Red-Black binary search tree, providing guaranteed O(log n) time for search, insertion, and deletion.'
+      }
+    ];
+  } else if (key.includes('python')) {
+    return [
+      {
+        id: 'q-1',
+        question: 'Which of the following is an IMMUTABLE data type in Python?',
+        options: ['list', 'tuple', 'dict', 'set'],
+        answerIndex: 1,
+        explanation: 'Tuples are immutable; once instantiated, their elements cannot be added, removed, or re-assigned.'
+      },
+      {
+        id: 'q-2',
+        question: 'What keyword transforms a regular Python function into a Generator?',
+        options: ['return', 'yield', 'async', 'lambda'],
+        answerIndex: 1,
+        explanation: 'The yield keyword pauses function execution and returns an intermediate value, maintaining state across calls.'
+      },
+      {
+        id: 'q-3',
+        question: 'In Pandas, what is the fastest way to perform calculations across millions of rows?',
+        options: [
+          'Using a for-loop with df.iterrows()',
+          'Vectorized operations using Pandas / NumPy C-underpinnings',
+          'Writing to a CSV and reading back with Python',
+          'Converting everything to a nested dictionary'
+        ],
+        answerIndex: 1,
+        explanation: 'Vectorized operations execute in compiled C code at memory bus speeds, avoiding the massive overhead of Python row iterations.'
+      },
+      {
+        id: 'q-4',
+        question: 'What will list(filter(lambda x: x % 2 == 0, [1, 2, 3, 4, 5, 6])) evaluate to?',
+        options: ['[1, 3, 5]', '[2, 4, 6]', '[0, 2, 4]', '[False, True]'],
+        answerIndex: 1,
+        explanation: 'The lambda checks for even numbers (x % 2 == 0), retaining [2, 4, 6].'
+      },
+      {
+        id: 'q-5',
+        question: 'What does the Global Interpreter Lock (GIL) primarily restrict in CPython?',
+        options: [
+          'Multiprocessing across multiple CPU cores',
+          'Concurrent multi-threading execution of Python bytecode on multiple CPU cores',
+          'Asynchronous network I/O with asyncio',
+          'Writing to disk files'
+        ],
+        answerIndex: 1,
+        explanation: 'The GIL allows only one thread to execute Python bytecode at a time, preventing multi-threaded CPU bound speedup in CPython.'
+      }
+    ];
+  } else if (key.includes('ai') || key.includes('intelligence') || key.includes('machine learning') || key.includes('neural')) {
+    return [
+      {
+        id: 'q-1',
+        question: 'Which activation function is widely used in modern hidden layers because it avoids the vanishing gradient problem?',
+        options: ['Sigmoid', 'Tanh', 'ReLU (Rectified Linear Unit)', 'Step function'],
+        answerIndex: 2,
+        explanation: 'ReLU (f(x) = max(0, x)) has a constant gradient of 1 for positive inputs, preventing gradients from vanishing during deep backpropagation.'
+      },
+      {
+        id: 'q-2',
+        question: 'In Machine Learning, what does an ROC-AUC score of 0.5 indicate?',
+        options: [
+          'A perfect classification model',
+          'A model with no better predictive power than random guessing',
+          'An overfitted model',
+          'A 50% loss error'
+        ],
+        answerIndex: 1,
+        explanation: 'An AUC (Area Under the Receiver Operating Characteristic Curve) of 0.5 represents a model with zero discriminative ability, equivalent to random coin tossing.'
+      },
+      {
+        id: 'q-3',
+        question: 'In the Transformer architecture, what is the primary purpose of Multi-Head Attention?',
+        options: [
+          'To compress the input tokens into a single scalar value',
+          'To enable the model to jointly attend to information from different representation subspaces at different positions',
+          'To replace backpropagation with genetic algorithms',
+          'To reduce GPU memory usage to zero'
+        ],
+        answerIndex: 1,
+        explanation: 'Multi-head attention projects Queries, Keys, and Values multiple times with different learned projections, allowing the model to focus on diverse linguistic and contextual aspects simultaneously.'
+      },
+      {
+        id: 'q-4',
+        question: 'What is the main advantage of Retrieval-Augmented Generation (RAG) over purely fine-tuning an LLM?',
+        options: [
+          'RAG dynamically injects up-to-date and private factual documents without requiring costly model retraining',
+          'RAG guarantees the LLM will never output words longer than 5 letters',
+          'Fine-tuning is always completely free',
+          'RAG eliminates the need for any embedding models'
+        ],
+        answerIndex: 0,
+        explanation: 'RAG decouples factual knowledge retrieval from parametric model weights, enabling instant updates and verifiable document citations without retraining.'
+      },
+      {
+        id: 'q-5',
+        question: 'In PyTorch, which method is called to zero out accumulated gradients before the backward pass?',
+        options: ['model.train()', 'optimizer.zero_grad()', 'loss.backward()', 'optimizer.step()'],
+        answerIndex: 1,
+        explanation: 'PyTorch accumulates gradients by default; optimizer.zero_grad() clears previous gradients before computing new ones with loss.backward().'
+      }
+    ];
   } else if (key.includes('leet') || key.includes('algo') || key.includes('code') || key.includes('cs') || key.includes('computer')) {
     return [
       {
@@ -276,6 +576,69 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         options: ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)'],
         answerIndex: 0,
         explanation: 'With a uniform hash distribution and reasonable load factor, average hash map insertion is O(1) constant time.'
+      }
+    ];
+  } else if (key.includes('cbse') || key.includes('12th')) {
+    return [
+      {
+        id: 'q-1',
+        question: 'Which of the following organic compounds will NOT undergo Aldol condensation (CBSE Chemistry)?',
+        options: [
+          'Acetaldehyde (CH₃CHO)',
+          'Formaldehyde (HCHO)',
+          'Acetone (CH₃COCH₃)',
+          'Propanal (CH₃CH₂CHO)'
+        ],
+        answerIndex: 1,
+        explanation: 'Formaldehyde (HCHO) lacks an α-hydrogen atom and therefore undergoes the Cannizzaro reaction instead of Aldol condensation.'
+      },
+      {
+        id: 'q-2',
+        question: 'What is the SI unit of Magnetic Dipole Moment M (CBSE Physics)?',
+        options: [
+          'Tesla (T)',
+          'Ampere-metre² (A·m²)',
+          'Weber (Wb)',
+          'Henry (H)'
+        ],
+        answerIndex: 1,
+        explanation: 'Magnetic dipole moment M = Current (A) × Area (m²), which gives the SI unit Ampere-metre² (A·m²).'
+      },
+      {
+        id: 'q-3',
+        question: 'In CBSE Class 12 Probability, if P(A) = 0.6, P(B) = 0.3, and A and B are independent events, what is P(A ∩ B)?',
+        options: [
+          '0.90',
+          '0.18',
+          '0.30',
+          '0.50'
+        ],
+        answerIndex: 1,
+        explanation: 'For independent events, P(A ∩ B) = P(A) × P(B) = 0.6 × 0.3 = 0.18.'
+      },
+      {
+        id: 'q-4',
+        question: 'In Python CBSE Class 12 CS file handling, which mode is used to append binary data to a file?',
+        options: [
+          "'r+'",
+          "'ab'",
+          "'w'",
+          "'a'"
+        ],
+        answerIndex: 1,
+        explanation: "'ab' opens a file for appending data in binary format without overwriting the previous contents."
+      },
+      {
+        id: 'q-5',
+        question: 'Which protein subunit directs RNA Polymerase to bind specifically to the promoter region during prokaryotic transcription?',
+        options: [
+          'DNA Polymerase I',
+          'Sigma factor (σ)',
+          'Rho factor (ρ)',
+          'DNA Ligase'
+        ],
+        answerIndex: 1,
+        explanation: 'The Sigma factor (σ) is the initiation factor that confers promoter-specific binding capability to RNA polymerase.'
       }
     ];
   } else {

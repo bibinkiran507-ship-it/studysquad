@@ -88,14 +88,14 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-neutral-700 uppercase tracking-wide mb-1.5">
-                  Subject / Major
+                  Subject / Curriculum
                 </label>
                 <input
                   type="text"
                   required
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  placeholder="e.g., Computer Science"
+                  placeholder="e.g., Java OOPs, Python Data Science, Deep Learning PyTorch, CBSE 12th"
                   className="w-full text-sm px-4 py-2.5 rounded-xl border border-neutral-200 bg-neutral-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-800/20"
                 />
               </div>
@@ -109,10 +109,18 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-neutral-200 bg-neutral-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-800/20"
                 >
+                  <option>Artificial Intelligence</option>
+                  <option>Python & Data Science</option>
+                  <option>Java Programming</option>
                   <option>Competitive Coding</option>
-                  <option>Finals & Midterms</option>
+                  <option>Engineering & Tech</option>
+                  <option>CBSE 12th Boards</option>
+                  <option>CBSE & ICSE Boards</option>
+                  <option>State Board / Matric</option>
+                  <option>Arts & Humanities</option>
+                  <option>Commerce & Business</option>
                   <option>GRE / GATE / GMAT</option>
-                  <option>Group Projects</option>
+                  <option>Finals & Midterms</option>
                   <option>Daily Accountability</option>
                   <option>Research & Thesis</option>
                 </select>

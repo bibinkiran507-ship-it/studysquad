@@ -8,6 +8,8 @@
     "backend": "node backend/server.js",
     "start": "node backend/server.js",
     "build": "vite build",
+    "render:build": "npm run build && cd backend && npm install && npm run prisma:push",
+    "install:all": "npm install && cd backend && npm install",
     "lint": "oxlint",
     "preview": "vite preview"
   },

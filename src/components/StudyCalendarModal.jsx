@@ -123,7 +123,7 @@ export default function StudyCalendarModal({
   }, [isOpen]);
 
   // Live timer tick for countdowns
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -179,17 +179,19 @@ export default function StudyCalendarModal({
 
   // Group events by day in current view
   const eventsByDay = useMemo(() => {
+    const y = currentDate.getFullYear();
+    const m = currentDate.getMonth();
     const map = {};
     events.forEach((ev) => {
       const d = new Date(ev.date);
-      if (d.getFullYear() === year && d.getMonth() === month) {
+      if (d.getFullYear() === y && d.getMonth() === m) {
         const dayNum = d.getDate();
         if (!map[dayNum]) map[dayNum] = [];
         map[dayNum].push(ev);
       }
     });
     return map;
-  }, [events, year, month]);
+  }, [events, currentDate]);
 
   // Events on currently selected date
   const selectedDayEvents = useMemo(() => {

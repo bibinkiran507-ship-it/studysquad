@@ -34,6 +34,7 @@ import {
   VolumeX,
   Calendar as CalendarIcon,
   Trash2,
+  LogOut,
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
@@ -84,6 +85,7 @@ export default function SquadRoomModal({
   onToggleTask,
   onAddTask,
   globalPresence = {},
+  onLeaveSquad,
 }) {
   const { user, openAuthModal } = useAuth();
 
@@ -149,10 +151,15 @@ export default function SquadRoomModal({
   const [inputMessage, setInputMessage] = useState('');
   const messagesEndRef = useRef(null);
   const socketRef = useRef(null);
+  const [socket, setSocket] = useState(null);
 
   // Unread chat notification state
   const [unreadCount, setUnreadCount] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const soundEnabledRef = useRef(soundEnabled);
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
   const audioCtxRef = useRef(null);
   const activeTabRef = useRef(activeTab);
 
@@ -225,17 +232,18 @@ export default function SquadRoomModal({
         ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '')
         : window.location.origin);
 
-    const socket = io(socketUrl, {
+    const socketInstance = io(socketUrl, {
       transports: ['websocket', 'polling'],
     });
-    socketRef.current = socket;
+    socketRef.current = socketInstance;
+    setSocket(socketInstance);
 
-    socket.emit('join_room', {
+    socketInstance.emit('join_room', {
       squadId: squad.id,
       user: user || { id: 'guest-' + Date.now(), name: 'Guest Explorer' },
     });
 
-    socket.on('receive_message', (msg) => {
+    socketInstance.on('receive_message', (msg) => {
       setMessages((prev) => {
         if (msg.id && prev.some((m) => m.id === msg.id)) {
           return prev;
@@ -257,7 +265,7 @@ export default function SquadRoomModal({
             osc.frequency.setValueAtTime(880, ctx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
             gain.gain.setValueAtTime(0, ctx.currentTime);
-            gain.gain.linearRampToValueAtTime(soundEnabled ? 0.08 : 0, ctx.currentTime + 0.01);
+            gain.gain.linearRampToValueAtTime(soundEnabledRef.current ? 0.08 : 0, ctx.currentTime + 0.01);
             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.4);
@@ -268,11 +276,11 @@ export default function SquadRoomModal({
     });
 
     // Live presence: who is currently in this room
-    socket.on('room_presence_update', ({ activeUsers }) => {
+    socketInstance.on('room_presence_update', ({ activeUsers }) => {
       setLiveUsers(activeUsers || []);
     });
 
-    socket.on('pomodoro_sync', ({ action, timeLeft }) => {
+    socketInstance.on('pomodoro_sync', ({ action, timeLeft }) => {
       if (action === 'start') {
         setIsActive(true);
         if (typeof timeLeft === 'number') setSecondsLeft(timeLeft);
@@ -286,11 +294,13 @@ export default function SquadRoomModal({
     });
 
     return () => {
-      socket.emit('leave_room', {
+      socketInstance.emit('leave_room', {
         squadId: squad.id,
         user: user || { name: 'Guest Explorer' },
       });
-      socket.disconnect();
+      socketInstance.disconnect();
+      socketRef.current = null;
+      setSocket(null);
     };
   }, [isOpen, squad?.id, user]);
 
@@ -308,16 +318,18 @@ export default function SquadRoomModal({
 
   // Pomodoro timer tick logic
   useEffect(() => {
-    let interval = null;
-    if (isActive && secondsLeft > 0) {
-      interval = setInterval(() => {
-        setSecondsLeft((s) => s - 1);
-      }, 1000);
-    } else if (secondsLeft === 0) {
-      setIsActive(false);
-    }
+    if (!isActive) return;
+    const interval = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          setIsActive(false);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
     return () => clearInterval(interval);
-  }, [isActive, secondsLeft]);
+  }, [isActive]);
 
   if (!isOpen || !squad) return null;
 
@@ -547,13 +559,31 @@ export default function SquadRoomModal({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              {onLeaveSquad && (
+                <button
+                  type="button"
+                  title="Leave this study squad"
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to leave this study squad?')) {
+                      onLeaveSquad(squad.id);
+                    }
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Leave Squad</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Navigation Tabs */}
@@ -863,6 +893,7 @@ export default function SquadRoomModal({
                                       `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(u.name || 'User')}`
                                     }
                                     alt={u.name}
+                                    referrerPolicy="no-referrer"
                                     className="w-7 h-7 rounded-full object-cover border-2 border-emerald-500/40"
                                   />
                                   <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-400 border border-neutral-900 shadow" />
@@ -1092,7 +1123,7 @@ export default function SquadRoomModal({
                 <TabPanel key="whiteboard">
                   <Suspense fallback={<TabLoader />}>
                     <Whiteboard
-                      socket={socketRef.current}
+                      socket={socket}
                       squadId={squad.id}
                       userName={user?.name || 'Student'}
                     />
@@ -1117,7 +1148,7 @@ export default function SquadRoomModal({
                     <AIStudyStudio
                       squad={squad}
                       user={user}
-                      socket={socketRef.current}
+                      socket={socket}
                       openAuthModal={openAuthModal}
                     />
                   </Suspense>
@@ -1130,7 +1161,7 @@ export default function SquadRoomModal({
                     <ResourceHub
                       squad={squad}
                       user={user}
-                      socket={socketRef.current}
+                      socket={socket}
                       openAuthModal={openAuthModal}
                     />
                   </Suspense>
@@ -1231,6 +1262,7 @@ export default function SquadRoomModal({
                                   `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(msg.user?.name || 'User')}`
                                 }
                                 alt={msg.user?.name || 'User'}
+                                referrerPolicy="no-referrer"
                                 className="w-7 h-7 rounded-full object-cover border border-white/15 mt-0.5"
                               />
                             </div>
@@ -1393,6 +1425,7 @@ export default function SquadRoomModal({
                             <img
                               src={member.avatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(member.name)}`}
                               alt={member.name}
+                              referrerPolicy="no-referrer"
                               className="w-8 h-8 rounded-full border border-white/10"
                             />
                             <div className="flex-1 min-w-0">

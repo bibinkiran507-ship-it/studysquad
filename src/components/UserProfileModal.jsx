@@ -182,6 +182,7 @@ export default function UserProfileModal() {
                   <img
                     src={isEditing && editAvatar ? editAvatar : avatarSrc}
                     alt={user.name}
+                    referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       e.target.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`;

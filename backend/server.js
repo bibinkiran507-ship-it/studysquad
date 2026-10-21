@@ -114,17 +114,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Serve compiled frontend in production if dist/ directory exists
-const distPath = path.join(__dirname, '..', 'dist');
-if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(distPath, 'index.html'));
-    }
-  });
-}
-
 
 // In-Memory Presence Tracker: squadId -> Map<socketId, { id, name, avatar, joinedAt }>
 const activeSquadPresence = new Map();
@@ -182,15 +171,17 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Production: Serve React frontend static files if running as a unified server
 const distPath = path.join(__dirname, '../dist');
-app.use(express.static(distPath));
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
 
-// For any non-API and non-upload route in production, serve index.html for client-side routing
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
-  res.sendFile(path.join(distPath, 'index.html'), (err) => {
-    if (err) next();
+  // For any non-API and non-upload route in production, serve index.html for client-side routing
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
+    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+      if (err) next();
+    });
   });
-});
+}
 
 // Global Error Handler (Sanitizes internal server error stack traces)
 app.use((err, req, res, next) => {
@@ -295,7 +286,16 @@ io.on('connection', (socket) => {
       // Emit to everybody in the squad room (including sender)
       io.to(squadId).emit('receive_message', message);
     } catch (err) {
-      console.error('Socket message save error:', err);
+      console.error('Socket message save error:', err.message);
+      const senderPresence = socketPresenceMap.get(socket.id);
+      io.to(squadId).emit('receive_message', {
+        id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        squadId,
+        userId,
+        content: content.trim(),
+        createdAt: new Date().toISOString(),
+        user: senderPresence?.user || { id: userId, name: 'Student', avatar: '' }
+      });
     }
   });
 

@@ -65,6 +65,7 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal }) {
                 <img
                   src={user.avatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`}
                   alt={user.name}
+                  referrerPolicy="no-referrer"
                   className="w-7 h-7 rounded-full object-cover border border-emerald-600/40 group-hover:border-emerald-500 transition-colors"
                 />
                 {(user.provider === 'google' || user.email?.includes('@gmail.com')) && (
@@ -194,6 +195,7 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal }) {
                   <img
                     src={user.avatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`}
                     alt={user.name}
+                    referrerPolicy="no-referrer"
                     className="w-7 h-7 rounded-full object-cover border border-emerald-600/40"
                   />
                   {(user.provider === 'google' || user.email?.includes('@gmail.com')) && (

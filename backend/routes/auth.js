@@ -90,7 +90,9 @@ router.post('/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({
+        error: 'Invalid email or password. If you originally signed up with Google, please click "Continue with Google" above.',
+      });
     }
 
     const token = generateToken(user.id);
@@ -181,7 +183,7 @@ router.post('/google', async (req, res) => {
           isEmailVerified: true, // Google accounts are pre-verified
         },
       });
-    } else if (verifiedAvatar && (!user.avatar || user.avatar.includes('dicebear'))) {
+    } else if (verifiedAvatar) {
       user = await prisma.user.update({
         where: { id: user.id },
         data: { avatar: verifiedAvatar, isEmailVerified: true },

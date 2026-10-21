@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search,
@@ -11,6 +11,8 @@ import {
   Filter,
   Zap,
   Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -70,6 +72,7 @@ function ActiveUsersStrip({ activeUsers = [] }) {
               `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(u.name)}`
             }
             alt={u.name}
+            referrerPolicy="no-referrer"
             className="w-6 h-6 rounded-full border-2 border-emerald-400/60 object-cover"
           />
           {/* tooltip */}
@@ -97,13 +100,51 @@ export default function SquadDirectory({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const { user, openAuthModal } = useAuth();
+  const categoriesRef = useRef(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
+
+  const checkScrollState = () => {
+    const el = categoriesRef.current;
+    if (el) {
+      const { scrollLeft, scrollWidth, clientWidth } = el;
+      setCanScrollLeft(scrollLeft > 5);
+      setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 5);
+    }
+  };
+
+  useEffect(() => {
+    checkScrollState();
+    const handleResize = () => checkScrollState();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleScroll = (direction) => {
+    const el = categoriesRef.current;
+    if (el) {
+      const scrollDistance = 280;
+      el.scrollBy({
+        left: direction === 'left' ? -scrollDistance : scrollDistance,
+        behavior: 'smooth',
+      });
+    }
+  };
 
   const categories = [
     'All',
+    'Artificial Intelligence',
+    'Python & Data Science',
+    'Java Programming',
     'Competitive Coding',
-    'Finals & Midterms',
+    'Engineering & Tech',
+    'CBSE 12th Boards',
+    'CBSE & ICSE Boards',
+    'State Board / Matric',
+    'Arts & Humanities',
+    'Commerce & Business',
     'GRE / GATE / GMAT',
-    'Group Projects',
+    'Finals & Midterms',
     'Daily Accountability',
     'Research & Thesis',
   ];
@@ -114,7 +155,8 @@ export default function SquadDirectory({
     const matchesSearch =
       squad.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       squad.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      squad.description.toLowerCase().includes(searchQuery.toLowerCase());
+      squad.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      squad.category.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
 
@@ -197,28 +239,67 @@ export default function SquadDirectory({
 
       {/* Category Filter Pills */}
       <FadeIn delay={0.08}>
-        <div className="flex items-center gap-2 overflow-x-auto pb-4 mb-8 scrollbar-none">
-          <span className="text-xs font-semibold text-neutral-800 flex items-center gap-1 mr-1">
+        <div className="flex items-center gap-2 mb-8">
+          <span className="text-xs font-semibold text-neutral-800 flex items-center gap-1 mr-1 shrink-0">
             <Filter className="w-3.5 h-3.5 text-neutral-700" /> Filter:
           </span>
-          {categories.map((cat, i) => (
-            <motion.button
-              key={cat}
-              initial={{ opacity: 0, x: -12 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.35, delay: 0.08 + i * 0.05, ease: 'easeOut' }}
-              type="button"
-              onClick={() => onSelectFilter(cat)}
-              className={`px-4 py-1.5 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap transition-all cursor-pointer shadow-xs ${
-                selectedFilter === cat
-                  ? 'bg-[#1C2E1E] text-white border border-[#1C2E1E] shadow-sm'
-                  : 'bg-white/90 backdrop-blur-md text-neutral-900 border border-neutral-300/90 hover:border-neutral-600 hover:bg-white'
-              }`}
-            >
-              {cat}
-            </motion.button>
-          ))}
+
+          {/* Left Arrow Button */}
+          <button
+            type="button"
+            onClick={() => handleScroll('left')}
+            disabled={!canScrollLeft}
+            aria-label="Scroll categories left"
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shrink-0 border transition-all ${
+              canScrollLeft
+                ? 'bg-white/95 text-neutral-800 border-neutral-300 shadow-xs hover:bg-neutral-100 hover:border-neutral-400 cursor-pointer active:scale-95'
+                : 'bg-neutral-100/50 text-neutral-300 border-neutral-200/50 cursor-not-allowed opacity-40'
+            }`}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          {/* Scrollable category list without scrollbar */}
+          <div
+            ref={categoriesRef}
+            onScroll={checkScrollState}
+            className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1 scroll-smooth"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          >
+            {categories.map((cat, i) => (
+              <motion.button
+                key={cat}
+                initial={{ opacity: 0, x: -12 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.35, delay: 0.08 + i * 0.05, ease: 'easeOut' }}
+                type="button"
+                onClick={() => onSelectFilter(cat)}
+                className={`px-4 py-1.5 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap transition-all cursor-pointer shadow-xs shrink-0 ${
+                  selectedFilter === cat
+                    ? 'bg-[#1C2E1E] text-white border border-[#1C2E1E] shadow-sm'
+                    : 'bg-white/90 backdrop-blur-md text-neutral-900 border border-neutral-300/90 hover:border-neutral-600 hover:bg-white'
+                }`}
+              >
+                {cat}
+              </motion.button>
+            ))}
+          </div>
+
+          {/* Right Arrow Button */}
+          <button
+            type="button"
+            onClick={() => handleScroll('right')}
+            disabled={!canScrollRight}
+            aria-label="Scroll categories right"
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shrink-0 border transition-all ${
+              canScrollRight
+                ? 'bg-white/95 text-neutral-800 border-neutral-300 shadow-xs hover:bg-neutral-100 hover:border-neutral-400 cursor-pointer active:scale-95'
+                : 'bg-neutral-100/50 text-neutral-300 border-neutral-200/50 cursor-not-allowed opacity-40'
+            }`}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
       </FadeIn>
 
@@ -226,13 +307,13 @@ export default function SquadDirectory({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <AnimatePresence>
           {filteredSquads.map((squad, index) => {
-            const memberCount =
-              squad.memberCount ?? squad.membersCount ?? squad.members?.length ?? 1;
-            const avatars =
-              squad.members?.map((m) => m.avatar).filter(Boolean) ||
-              squad.avatars || [
-                'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-              ];
+            const realMembers = Array.isArray(squad.members) ? squad.members : [];
+            const memberCount = typeof squad.memberCount === 'number'
+              ? squad.memberCount
+              : realMembers.length;
+            const avatars = realMembers
+              .map((m) => m?.avatar || (m?.name ? `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(m.name)}` : null))
+              .filter(Boolean);
             const matchScore = squad.aiMatchScore ?? squad.matchScore ?? 95;
 
             // Live presence for THIS squad
@@ -314,18 +395,34 @@ export default function SquadDirectory({
                 <div className="mt-6 pt-5 border-t border-neutral-200/90">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center">
-                      <div className="flex -space-x-2">
-                        {avatars.slice(0, 4).map((avatar, i) => (
-                          <img
-                            key={i}
-                            src={avatar}
-                            alt="Member"
-                            className="w-7 h-7 rounded-full border-2 border-white object-cover shadow-xs"
-                          />
-                        ))}
-                      </div>
+                      {avatars.length > 0 ? (
+                        <div className="flex -space-x-2">
+                          {avatars.slice(0, 4).map((avatar, i) => {
+                            const memberName = realMembers[i]?.name || 'Member';
+                            return (
+                              <img
+                                key={i}
+                                src={avatar}
+                                alt={memberName}
+                                title={memberName}
+                                referrerPolicy="no-referrer"
+                                className="w-7 h-7 rounded-full border-2 border-white object-cover shadow-xs"
+                              />
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-emerald-50 border border-emerald-200/70 flex items-center justify-center text-emerald-800">
+                          <Users className="w-3.5 h-3.5" />
+                        </div>
+                      )}
                       <span className="ml-2.5 text-xs font-bold text-neutral-800">
                         {memberCount}/{squad.maxMembers} spots
+                        {memberCount === 0 && (
+                          <span className="ml-1.5 text-[11px] font-semibold text-emerald-700">
+                            (Open)
+                          </span>
+                        )}
                       </span>
                     </div>
                     <span className="text-[11px] font-bold text-neutral-800 bg-neutral-100 px-2.5 py-0.5 rounded-md border border-neutral-200/90">

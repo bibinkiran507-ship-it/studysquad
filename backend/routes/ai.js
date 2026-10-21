@@ -11,8 +11,20 @@ const __dirname = path.dirname(__filename);
 
 const router = Router();
 
+// Helper to clean raw text and extract pure JSON (stripping markdown fences if present)
+export const cleanJson = (text) => {
+  if (!text) return '';
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/, '')
+    .replace(/```\s*$/, '')
+    .trim();
+  const match = cleaned.match(/\[[\s\S]*\]/) || cleaned.match(/\{[\s\S]*\}/);
+  return match ? match[0] : cleaned;
+};
+
 // Helper to initialize Gemini with active model support
-export const getGeminiModel = (modelName = 'gemini-3.1-flash-lite') => {
+export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
@@ -32,7 +44,13 @@ export const generateWithGemini = async (contents, options = {}) => {
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
   }
-  const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+  const candidateModels = [
+    'gemini-flash-lite-latest',
+    'gemini-3.5-flash',
+    'gemini-flash-latest',
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+  ];
   const genAI = new GoogleGenerativeAI(apiKey.trim());
 
   for (const modelName of candidateModels) {
@@ -106,8 +124,8 @@ No markdown fences, no backticks, only raw JSON.
 `;
 
         const result = await model.generateContent(prompt);
-        const text = result.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-        const parsed = JSON.parse(text);
+        const text = result.response.text();
+        const parsed = JSON.parse(cleanJson(text));
 
         const matchedSquads = parsed
           .map((m) => {
@@ -212,20 +230,100 @@ Example: ["Solve 3 medium DP problems on LeetCode", "Complete mock interview on 
 No extra text or backticks.
 `;
         const result = await model.generateContent(prompt);
-        const text = result.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-        const goals = JSON.parse(text);
+        const text = result.response.text();
+        const goals = JSON.parse(cleanJson(text));
         return res.json({ goals, poweredBy: 'Gemini AI' });
       } catch (err) {
         console.warn('Gemini goal suggestion failed, falling back:', err.message);
       }
     }
 
-    // Heuristic Fallback Goals based on subject
+    // Heuristic Fallback Goals based on subject & curriculum
     const fallbackMap = {
       default: [
         `Complete deep dive into core ${subject || 'topic'} fundamentals`,
         `Solve 2 practical exercises and post solutions in squad chat`,
         `Conduct 20-minute peer review & recap session`
+      ],
+      cbse: [
+        'Solve 15 NCERT Exemplar numericals and mark difficult concepts',
+        'Write out key chemical equations and physics law derivations from memory',
+        'Timed 45-minute drill solving previous 5-year CBSE board exam questions'
+      ],
+      cbse_physics: [
+        'Derive Lens Maker formula, prism deviation, and Huygens wave optics principle',
+        'Solve 15 NCERT Exemplar numericals on Electrostatics, Current Electricity & AC circuits',
+        'Timed 1-hour previous 5-year CBSE Class 12 Physics question paper drill'
+      ],
+      cbse_chem: [
+        'Practice 10 essential organic conversion roadmaps and name reactions (Aldol, Cannizzaro)',
+        'Solve Nernst equation and First-Order Chemical Kinetics half-life numericals',
+        'Revise d & f block properties, Lanthanoid contraction & coordination IUPAC nomenclature'
+      ],
+      cbse_math: [
+        'Solve 20 Integration by Parts and Definite Integrals properties questions',
+        'Practice 3D Geometry: Shortest distance between skew lines & vector plane equations',
+        'Master Bayes Theorem 5-mark conditional probability word problems'
+      ],
+      cbse_bio: [
+        'Draw and label DNA replication fork, transcription unit & lac operon mechanism',
+        'Solve genetics pedigree analysis charts and dihybrid cross ratios',
+        'Review recombinant DNA technology tools, PCR steps, and gel electrophoresis diagrams'
+      ],
+      cbse_cs: [
+        'Write Python functions for text file counting, binary pickle load/dump & CSV writer',
+        'Implement Stack operations (Push and Pop) using a Python list structure',
+        'Solve 10 CBSE SQL board questions covering GROUP BY, HAVING, and INNER JOIN'
+      ],
+      cbse_english: [
+        'Draft a full-mark formal Job Application with Bio-Data / Resume format',
+        'Analyze poetic devices and central themes in Flamingo poetry (A Thing of Beauty, Keeping Quiet)',
+        'Practice timed reading comprehension and formal Notice writing speed drill'
+      ],
+      icse: [
+        'Complete Selina textbook chapter-end analytical questions',
+        'Practice Section-A compulsory questions and lens/ray diagrams',
+        'Peer review on tricky 4-mark ICSE past board questions'
+      ],
+      matric: [
+        'Master standard 5-mark and 8-mark theorem proofs with step markings',
+        'Solve state board model question paper blueprint high-weightage chapters',
+        'Conduct 30-minute squad formula flashcard speed drill'
+      ],
+      engineering: [
+        'Derive core university syllabus theorems and design equations',
+        'Solve 3 university semester exam numerical problems (past 5 years)',
+        'Review circuit schematics, architectural block diagrams, and protocol flows'
+      ],
+      arts: [
+        'Outline a structured critical essay with primary source text citations',
+        'Analyze historical, cultural, and political context for assigned readings',
+        'Exchange 20-minute peer critiques on weekly thesis arguments'
+      ],
+      commerce: [
+        'Complete comprehensive balance sheet adjustments and partnership entries',
+        'Review micro/macro economic graph shifts and elasticity formulas',
+        'Solve a timed 40-question mock speed test for CA Foundation / B.Com'
+      ],
+      java: [
+        'Implement custom generic data structures (LinkedList, BST) using modern Java syntax',
+        'Practice Java 8 Streams API (filter, map, flatMap, reduce) and lambda expressions',
+        'Build and test a secure Spring Boot REST controller with JPA Hibernate relationships'
+      ],
+      python: [
+        'Solve 10 advanced Python algorithmic drills utilizing list comprehensions and generators',
+        'Perform exploratory data analysis (EDA) on a dataset using Pandas grouping and Matplotlib plots',
+        'Optimize vectorized numeric computations using NumPy broadcasting techniques'
+      ],
+      ai: [
+        'Implement forward-pass and backpropagation gradient descent equations from scratch',
+        'Train a PyTorch neural network model with Cross-Entropy Loss and Adam optimizer',
+        'Evaluate model performance using Confusion Matrix, Precision, Recall, and ROC-AUC curves'
+      ],
+      genai: [
+        'Build an end-to-end Retrieval-Augmented Generation (RAG) pipeline with ChromaDB and LangChain',
+        'Implement tool-calling agent with structured JSON outputs and system prompt guards',
+        'Evaluate RAG retrieval accuracy and response hallucination using context metrics'
       ],
       leetcode: [
         'Solve 2 LeetCode Medium problems on Tree/Graph traversal',
@@ -244,9 +342,45 @@ No extra text or backticks.
       ]
     };
 
-    const key = (subject || category || '').toLowerCase();
+    const key = `${subject || ''} ${category || ''} ${squadName || ''}`.toLowerCase();
     let selectedGoals = fallbackMap.default;
-    if (key.includes('leet') || key.includes('algo') || key.includes('dsa')) {
+    if (key.includes('cbse') || key.includes('ncert') || key.includes('12th')) {
+      if (key.includes('physic')) {
+        selectedGoals = fallbackMap.cbse_physics;
+      } else if (key.includes('chem')) {
+        selectedGoals = fallbackMap.cbse_chem;
+      } else if (key.includes('math') || key.includes('calculus') || key.includes('vector')) {
+        selectedGoals = fallbackMap.cbse_math;
+      } else if (key.includes('bio') || key.includes('neet') || key.includes('genetics')) {
+        selectedGoals = fallbackMap.cbse_bio;
+      } else if (key.includes('cs') || key.includes('computer') || key.includes('python')) {
+        selectedGoals = fallbackMap.cbse_cs;
+      } else if (key.includes('english') || key.includes('flamingo') || key.includes('vistas')) {
+        selectedGoals = fallbackMap.cbse_english;
+      } else if (key.includes('commerce') || key.includes('account') || key.includes('economic')) {
+        selectedGoals = fallbackMap.commerce;
+      } else {
+        selectedGoals = fallbackMap.cbse;
+      }
+    } else if (key.includes('java') || key.includes('spring')) {
+      selectedGoals = fallbackMap.java;
+    } else if (key.includes('python') || key.includes('pandas') || key.includes('numpy')) {
+      selectedGoals = fallbackMap.python;
+    } else if (key.includes('genai') || key.includes('generative') || key.includes('llm') || key.includes('rag') || key.includes('prompt')) {
+      selectedGoals = fallbackMap.genai;
+    } else if (key.includes('artificial') || key.includes('intelligence') || key.includes('machine learning') || key.includes('pytorch') || key.includes('neural')) {
+      selectedGoals = fallbackMap.ai;
+    } else if (key.includes('icse') || key.includes('isc') || key.includes('selina')) {
+      selectedGoals = fallbackMap.icse;
+    } else if (key.includes('matric') || key.includes('state board') || key.includes('samacheer')) {
+      selectedGoals = fallbackMap.matric;
+    } else if (key.includes('engineer') || key.includes('ece') || key.includes('eee') || key.includes('mech') || key.includes('civil') || key.includes('dbms') || key.includes('os') || key.includes('network')) {
+      selectedGoals = fallbackMap.engineering;
+    } else if (key.includes('art') || key.includes('humanities') || key.includes('literature') || key.includes('history') || key.includes('philosophy')) {
+      selectedGoals = fallbackMap.arts;
+    } else if (key.includes('commerce') || key.includes('ca foundation') || key.includes('account') || key.includes('economic') || key.includes('business')) {
+      selectedGoals = fallbackMap.commerce;
+    } else if (key.includes('leet') || key.includes('algo') || key.includes('dsa') || key.includes('bootcamp')) {
       selectedGoals = fallbackMap.leetcode;
     } else if (key.includes('system') || key.includes('design') || key.includes('scale')) {
       selectedGoals = fallbackMap.system;
@@ -297,8 +431,8 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 ]
 `;
         const result = await model.generateContent(prompt);
-        const text = result.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-        const cards = JSON.parse(text);
+        const text = result.response.text();
+        const cards = JSON.parse(cleanJson(text));
         if (Array.isArray(cards) && cards.length > 0) {
           return res.json({ flashcards: cards, poweredBy: 'Gemini AI' });
         }
@@ -473,8 +607,8 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 ]
 `;
         const result = await model.generateContent(prompt);
-        const text = result.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-        const quiz = JSON.parse(text);
+        const text = result.response.text();
+        const quiz = JSON.parse(cleanJson(text));
         if (Array.isArray(quiz) && quiz.length > 0) {
           return res.json({ quiz, poweredBy: 'Gemini AI' });
         }

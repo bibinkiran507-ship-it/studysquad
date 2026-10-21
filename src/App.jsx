@@ -139,10 +139,13 @@ function AppInner() {
       setSquads((prev) =>
         prev.map((sq) => {
           if (sq.id === squadId) {
+            const currentMembers = Array.isArray(sq.members) ? sq.members : [];
+            const currentCount = typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
             const updated = {
               ...sq,
               isJoined: true,
-              memberCount: (sq.memberCount || sq.membersCount || 1) + 1,
+              memberCount: currentCount + 1,
+              members: [...currentMembers, user],
             };
             setActiveSquadRoom(updated);
             return updated;
@@ -150,6 +153,33 @@ function AppInner() {
           return sq;
         })
       );
+    }
+  };
+
+  // Leave a squad via API
+  const handleLeaveSquad = async (squadId) => {
+    if (!user) return;
+    try {
+      await squadsAPI.leave(squadId);
+      setSquads((prev) =>
+        prev.map((sq) => {
+          if (sq.id === squadId) {
+            const currentMembers = Array.isArray(sq.members) ? sq.members : [];
+            const newMembers = currentMembers.filter((m) => m.id !== user.id);
+            const currentCount = typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
+            return {
+              ...sq,
+              isJoined: false,
+              memberCount: Math.max(0, currentCount - 1),
+              members: newMembers,
+            };
+          }
+          return sq;
+        })
+      );
+      setActiveSquadRoom(null);
+    } catch (err) {
+      console.error('Failed to leave squad:', err);
     }
   };
 
@@ -382,6 +412,7 @@ function AppInner() {
         onToggleTask={handleToggleTask}
         onAddTask={handleAddTask}
         globalPresence={globalPresence}
+        onLeaveSquad={handleLeaveSquad}
       />
     </div>
   );

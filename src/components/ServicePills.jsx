@@ -2,10 +2,18 @@ import { motion, AnimatePresence } from 'motion/react'
 import { Check, ArrowRight } from 'lucide-react'
 
 const PREP_OPTIONS = [
-  'Finals & Midterms',
+  'Artificial Intelligence',
+  'Python & Data Science',
+  'Java Programming',
   'Competitive Coding',
-  'Group Projects',
+  'Engineering & Tech',
+  'CBSE 12th Boards',
+  'CBSE & ICSE Boards',
+  'State Board / Matric',
+  'Arts & Humanities',
+  'Commerce & Business',
   'GRE / GATE / GMAT',
+  'Finals & Midterms',
   'Daily Accountability',
   'Research & Thesis',
 ]

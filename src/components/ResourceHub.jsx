@@ -185,14 +185,15 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const parsed = parseGitHubRepo(res.url);
 
   useEffect(() => {
+    const parsed = parseGitHubRepo(res.url);
     if (!parsed) {
       setLoading(false);
       setError(true);
       return;
     }
+    let isCurrent = true;
     setLoading(true);
     fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`)
       .then((r) => {
@@ -200,13 +201,21 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
         return r.json();
       })
       .then((data) => {
-        setMeta(data);
-        setLoading(false);
+        if (isCurrent) {
+          setMeta(data);
+          setLoading(false);
+        }
       })
       .catch(() => {
-        setLoading(false);
-        setError(true);
+        if (isCurrent) {
+          setLoading(false);
+          setError(true);
+        }
       });
+
+    return () => {
+      isCurrent = false;
+    };
   }, [res.url]);
 
   const langColor = meta?.language ? LANGUAGE_COLORS[meta.language] || "#8b949e" : null;
