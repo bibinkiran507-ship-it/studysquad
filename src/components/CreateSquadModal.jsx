@@ -9,7 +9,6 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
   const [platform, setPlatform] = useState('Google Meet')
   const [meetingUrl, setMeetingUrl] = useState('')
   const [schedule, setSchedule] = useState('Mon, Wed @ 7:00 PM EST')
-  const [maxMembers, setMaxMembers] = useState(5)
   const [description, setDescription] = useState('')
 
   if (!isOpen) return null
@@ -32,7 +31,7 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
       platform,
       meetingUrl: meetingUrl.trim() || defaultMeetingUrl,
       schedule,
-      maxMembers: Number(maxMembers),
+      maxMembers: 999999, // Unlimited capacity - open to all students
       description: description.trim() || 'Collaborative study sessions and problem solving.',
     }
 
@@ -145,16 +144,12 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
 
               <div>
                 <label className="block text-xs font-semibold text-neutral-700 uppercase tracking-wide mb-1.5">
-                  Max Member Spots
+                  Squad Capacity
                 </label>
-                <input
-                  type="number"
-                  min="2"
-                  max="12"
-                  value={maxMembers}
-                  onChange={(e) => setMaxMembers(e.target.value)}
-                  className="w-full text-sm px-4 py-2.5 rounded-xl border border-neutral-200 bg-neutral-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-800/20"
-                />
+                <div className="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-emerald-200/80 bg-emerald-50/70 text-emerald-900 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                  <span className="truncate">Unlimited • Open to all</span>
+                </div>
               </div>
             </div>
 

@@ -287,10 +287,7 @@ router.post('/:id/join', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'You are already a member of this squad.' });
     }
 
-    if (squad.members.length >= squad.maxMembers) {
-      return res.status(400).json({ error: 'This squad is already full!' });
-    }
-
+    // Squads are completely open with unlimited capacity - anyone can join!
     await prisma.squadMember.create({
       data: {
         squadId: id,

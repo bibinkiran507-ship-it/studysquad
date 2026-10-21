@@ -416,14 +416,14 @@ export default function SquadDirectory({
                           <Users className="w-3.5 h-3.5" />
                         </div>
                       )}
-                      <span className="ml-2.5 text-xs font-bold text-neutral-800">
-                        {memberCount}/{squad.maxMembers} spots
-                        {memberCount === 0 && (
-                          <span className="ml-1.5 text-[11px] font-semibold text-emerald-700">
-                            (Open)
-                          </span>
-                        )}
-                      </span>
+                      <div className="ml-2.5 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-neutral-800">
+                          {memberCount} {memberCount === 1 ? 'member' : 'members'}
+                        </span>
+                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/70">
+                          Open to all
+                        </span>
+                      </div>
                     </div>
                     <span className="text-[11px] font-bold text-neutral-800 bg-neutral-100 px-2.5 py-0.5 rounded-md border border-neutral-200/90">
                       {squad.platform}
