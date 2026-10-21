@@ -59,7 +59,10 @@ export default function UpgradeProModal({ isOpen, onClose }) {
       // 2. Load Razorpay script
       const scriptLoaded = await loadRazorpayScript();
 
-      if (!scriptLoaded || isTestMode) {
+      // Open official Razorpay Checkout popup whenever a valid key is provided
+      const hasConfiguredKey = keyId && (keyId.startsWith('rzp_test_') || keyId.startsWith('rzp_live_'));
+
+      if (!scriptLoaded || (!hasConfiguredKey && isTestMode)) {
         // Fallback simulator for development / test mode
         console.log('⚡ Using Razorpay instant verification simulator');
         const verifyRes = await paymentAPI.verifyPayment({
