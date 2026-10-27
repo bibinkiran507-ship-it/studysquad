@@ -10,8 +10,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Setup local uploads storage for slide decks, lecture notes, and PDFs
-const uploadsDir = path.join(__dirname, '..', 'uploads');
+// Setup persistent or local uploads storage for slide decks, lecture notes, and PDFs
+const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -55,10 +55,10 @@ router.get('/', optionalAuth, async (req, res) => {
     }
     if (search) {
       where.OR = [
-        { name: { contains: search } },
-        { subject: { contains: search } },
-        { description: { contains: search } },
-        { category: { contains: search } }
+        { name: { contains: search, mode: 'insensitive' } },
+        { subject: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+        { category: { contains: search, mode: 'insensitive' } },
       ];
     }
 

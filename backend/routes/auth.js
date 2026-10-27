@@ -50,6 +50,8 @@ router.post('/register', async (req, res) => {
         password: hashedPassword,
         avatar,
         isEmailVerified: false,
+        isPro: false,
+        proPlan: 'free',
       },
       select: {
         id: true,
@@ -109,8 +111,8 @@ router.post('/login', async (req, res) => {
         bio: user.bio,
         pomodoroSessions: user.pomodoroSessions,
         isEmailVerified: user.isEmailVerified,
-        isPro: user.isPro || false,
-        proPlan: user.proPlan || '',
+        isPro: Boolean(user.isPro),
+        proPlan: user.proPlan || 'free',
         proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt
       }
@@ -187,6 +189,8 @@ router.post('/google', async (req, res) => {
           password: hashedPassword,
           avatar: userAvatar,
           isEmailVerified: true, // Google accounts are pre-verified
+          isPro: false,
+          proPlan: 'free',
         },
       });
     } else if (verifiedAvatar) {
@@ -207,8 +211,8 @@ router.post('/google', async (req, res) => {
         bio: user.bio || '',
         pomodoroSessions: user.pomodoroSessions || 0,
         isEmailVerified: user.isEmailVerified,
-        isPro: user.isPro || false,
-        proPlan: user.proPlan || '',
+        isPro: Boolean(user.isPro),
+        proPlan: user.proPlan || 'free',
         proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt,
         provider: 'google',

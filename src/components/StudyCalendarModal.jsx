@@ -302,9 +302,22 @@ export default function StudyCalendarModal({
       });
     } catch (err) {
       console.error('Error getting AI study plan:', err);
+      const target = new Date(exam.date).getTime();
+      const daysLeft = Math.max(1, Math.ceil((target - Date.now()) / (1000 * 60 * 60 * 24)));
+      const fallback = `📅 **${daysLeft}-Day Exam Countdown Strategy: ${exam.title || exam.subject}**\n\n` +
+        `🎯 **Phase 1: Diagnostic & High-Yield Concepts (Days 1–${Math.max(1, Math.floor(daysLeft * 0.4))})**\n` +
+        `• Audit the syllabus: identify high-weight topics and formula derivations.\n` +
+        `• Build active recall flashcards in the AI Quiz & Cards studio.\n\n` +
+        `🔥 **Phase 2: Intensive Problem Sets & Mock Exams (Days ${Math.max(2, Math.floor(daysLeft * 0.4) + 1)}–${Math.max(2, daysLeft - 1)})**\n` +
+        `• Practice timed past exam questions under 25-minute Pomodoro sprints.\n` +
+        `• Host a peer whiteboard review session in your Squad Room.\n\n` +
+        `🏆 **Phase 3: Final Polish (Day Before Exam)**\n` +
+        `• Light formula sheet scan, prepare your exam kit, and get 8 hours of sleep!\n\n` +
+        `💡 *Tip: Ensure the backend server is running on port 3001 to get custom real-time Google Gemini generation.*`;
+
       setAiPlanModal((prev) => ({
         ...prev,
-        plan: 'Could not connect to AI engine. Review core lecture notes and take timed practice quizzes!',
+        plan: fallback,
         loading: false,
       }));
     }

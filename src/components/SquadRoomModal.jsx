@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
-import { aiAPI, squadsAPI, eventsAPI } from '../api/client';
+import { aiAPI, squadsAPI, eventsAPI, getSocketUrl } from '../api/client';
 
 // Lazy-load heavy tab components to prevent blocking the main thread
 const Whiteboard   = lazy(() => import('./Whiteboard'));
@@ -163,6 +163,17 @@ export default function SquadRoomModal({
   }, [soundEnabled]);
   const audioCtxRef = useRef(null);
   const activeTabRef = useRef(activeTab);
+  const tabListRef = useRef(null);
+
+  // Auto-scroll active tab into view so it is never cut off on any screen size
+  useEffect(() => {
+    if (tabListRef.current) {
+      const activeEl = tabListRef.current.querySelector('[data-active="true"]');
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+      }
+    }
+  }, [activeTab]);
 
   const [aiCopilotResult, setAiCopilotResult] = useState(null);
   const [isAiCopilotLoading, setIsAiCopilotLoading] = useState(false);
@@ -227,11 +238,7 @@ export default function SquadRoomModal({
   useEffect(() => {
     if (!isOpen || !squad) return;
 
-    const socketUrl =
-      import.meta.env.VITE_SOCKET_URL ||
-      (import.meta.env.VITE_API_URL
-        ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '')
-        : window.location.origin);
+    const socketUrl = getSocketUrl();
 
     const socketInstance = io(socketUrl, {
       transports: ['websocket', 'polling'],
@@ -449,10 +456,6 @@ export default function SquadRoomModal({
       openAuthModal('register');
       return;
     }
-    if (!user.isPro) {
-      if (onOpenProModal) onOpenProModal();
-      return;
-    }
 
     setIsSuggestingGoals(true);
     try {
@@ -479,10 +482,6 @@ export default function SquadRoomModal({
   const handleRunAiCopilot = async (mode) => {
     if (!user) {
       openAuthModal('register');
-      return;
-    }
-    if (!user.isPro) {
-      if (onOpenProModal) onOpenProModal();
       return;
     }
 
@@ -554,7 +553,7 @@ export default function SquadRoomModal({
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-neutral-900/90 text-white w-full max-w-5xl rounded-3xl shadow-2xl border border-white/15 overflow-hidden flex flex-col max-h-[92vh] backdrop-blur-2xl"
+          className="bg-neutral-900/90 text-white w-full max-w-6xl rounded-3xl shadow-2xl border border-white/15 overflow-hidden flex flex-col max-h-[92vh] backdrop-blur-2xl"
         >
           {/* Header */}
           <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/5">
@@ -606,47 +605,62 @@ export default function SquadRoomModal({
           </div>
 
           {/* Navigation Tabs */}
-          <div className="flex items-center px-4 sm:px-6 border-b border-white/10 bg-black/20 gap-2 sm:gap-4 overflow-x-auto no-scrollbar">
+          <div
+            ref={tabListRef}
+            className="flex items-center px-3 sm:px-6 border-b border-white/10 bg-black/25 gap-1 sm:gap-1.5 lg:gap-2.5 overflow-x-auto no-scrollbar scroll-smooth"
+          >
             <button
               type="button"
-              onClick={() => setActiveTab('focus')}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              data-active={activeTab === 'focus'}
+              onClick={(e) => {
+                setActiveTab('focus');
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+              }}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'focus'
                   ? 'border-emerald-400 text-emerald-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <Flame className="w-4 h-4" />
-              <span>Focus & Goals</span>
+              <Flame className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>Focus</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setActiveTab('whiteboard')}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              data-active={activeTab === 'whiteboard'}
+              onClick={(e) => {
+                setActiveTab('whiteboard');
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+              }}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'whiteboard'
                   ? 'border-violet-400 text-violet-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <PenTool className="w-4 h-4" />
-              <span>Live Whiteboard</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-bold border border-violet-500/30">
+              <PenTool className="w-4 h-4 shrink-0 text-violet-400" />
+              <span>Whiteboard</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-bold border border-violet-500/30">
                 Live
               </span>
             </button>
 
             <button
               type="button"
-              onClick={() => setActiveTab('video')}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              data-active={activeTab === 'video'}
+              onClick={(e) => {
+                setActiveTab('video');
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+              }}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'video'
                   ? 'border-rose-400 text-rose-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <Video className="w-4 h-4" />
-              <span>In-Room Call</span>
+              <Video className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>Call</span>
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
@@ -655,40 +669,40 @@ export default function SquadRoomModal({
 
             <button
               type="button"
-              onClick={() => setActiveTab('quiz')}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              data-active={activeTab === 'quiz'}
+              onClick={(e) => {
+                setActiveTab('quiz');
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+              }}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'quiz'
                   ? 'border-violet-400 text-violet-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <Brain className="w-4 h-4" />
-              <span>AI Quiz & Cards</span>
-              {user?.isPro ? (
-                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30 flex items-center gap-0.5">
-                  <Sparkles className="w-2.5 h-2.5" /> PRO
-                </span>
-              ) : (
-                <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/40 flex items-center gap-0.5">
-                  <Crown className="w-2.5 h-2.5 text-amber-400" /> PRO
-                </span>
-              )}
+              <Brain className="w-4 h-4 shrink-0 text-violet-400" />
+              <span>Quiz & Cards</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30 flex items-center gap-0.5">
+                <Sparkles className="w-2.5 h-2.5" /> AI
+              </span>
             </button>
 
             <button
               type="button"
-              onClick={() => {
+              data-active={activeTab === 'chat'}
+              onClick={(e) => {
                 setActiveTab('chat');
                 setUnreadCount(0);
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
               }}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 relative ${
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] relative ${
                 activeTab === 'chat'
                   ? 'border-cyan-400 text-cyan-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <MessageSquare className="w-4 h-4" />
-              <span>Squad Chat</span>
+              <MessageSquare className="w-4 h-4 shrink-0 text-cyan-400" />
+              <span>Chat</span>
               {/* Unread badge — shows only when user is NOT on chat tab and has unread messages */}
               {unreadCount > 0 && activeTab !== 'chat' && (
                 <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold shadow-lg shadow-red-500/40 animate-bounce">
@@ -697,7 +711,7 @@ export default function SquadRoomModal({
               )}
               {/* Total message count pill — shown when on chat tab */}
               {activeTab === 'chat' && messages.length > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.2 bg-cyan-500/20 text-cyan-300 text-[10px] rounded-full border border-cyan-500/30">
+                <span className="ml-0.5 px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] rounded-full border border-cyan-500/30">
                   {messages.length}
                 </span>
               )}
@@ -705,16 +719,20 @@ export default function SquadRoomModal({
 
             <button
               type="button"
-              onClick={() => setActiveTab('resources')}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              data-active={activeTab === 'resources'}
+              onClick={(e) => {
+                setActiveTab('resources');
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+              }}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'resources'
                   ? 'border-amber-400 text-amber-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <BookOpen className="w-4 h-4" />
-              <span>Resources & Notes</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
+              <BookOpen className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>Resources</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
                 Hub
               </span>
             </button>
@@ -722,20 +740,22 @@ export default function SquadRoomModal({
             {/* Timetable & Exams tab */}
             <button
               type="button"
-              onClick={() => {
+              data-active={activeTab === 'schedule'}
+              onClick={(e) => {
                 setActiveTab('schedule');
                 fetchSquadEvents();
+                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
               }}
-              className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'schedule'
                   ? 'border-emerald-400 text-emerald-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
-              <CalendarIcon className="w-4 h-4" />
-              <span>Timetable & Exams</span>
+              <CalendarIcon className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>Schedule</span>
               {squadEvents.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
                   {squadEvents.length}
                 </span>
               )}
@@ -745,7 +765,8 @@ export default function SquadRoomModal({
             {isOwner && (
               <button
                 type="button"
-                onClick={() => {
+                data-active={activeTab === 'admin'}
+                onClick={(e) => {
                   setActiveTab('admin');
                   if (squadMembers.length === 0) {
                     setLoadingMembers(true);
@@ -754,20 +775,24 @@ export default function SquadRoomModal({
                       .catch(console.warn)
                       .finally(() => setLoadingMembers(false));
                   }
+                  e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
                 }}
-                className={`py-3 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 ${
+                className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                   activeTab === 'admin'
                     ? 'border-rose-400 text-rose-400'
                     : 'border-transparent text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                <Shield className="w-4 h-4" />
+                <Shield className="w-4 h-4 shrink-0 text-rose-400" />
                 <span>Admin</span>
-                <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/30">
+                <span className="px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/30">
                   Owner
                 </span>
               </button>
             )}
+
+            {/* Trailing spacer to ensure padding when scrolled on small screens */}
+            <div className="w-4 shrink-0" />
           </div>
 
           {/* Modal Body */}
@@ -1162,6 +1187,7 @@ export default function SquadRoomModal({
                     <InRoomVideo
                       squad={squad}
                       user={user}
+                      socket={socket}
                     />
                   </Suspense>
                 </TabPanel>

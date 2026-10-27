@@ -1,11 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const schemaPath = path.join(__dirname, '..', 'prisma', 'schema.prisma');
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
+const schemaPath = path.join(__dirname, '..', 'prisma', 'schema.prisma');
 const dbUrl = process.env.DATABASE_URL || '';
 
 if (dbUrl.startsWith('postgres://') || dbUrl.startsWith('postgresql://')) {

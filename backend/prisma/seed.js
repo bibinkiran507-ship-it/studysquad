@@ -22,11 +22,12 @@ async function main() {
 
   console.log(`Using squad creator: ${user.name} (${user.email})`);
 
-  // Check if squads table is empty (e.g. brand new cloud database deployment)
-  const existingSquadsCount = await prisma.squad.count();
-  if (existingSquadsCount === 0) {
-    console.log('🌱 Pre-populating 6 starter study squads in database...');
-    const starterSquads = [
+  // Check existing squads to idempotently insert missing squads
+  const existingSquads = await prisma.squad.findMany({ select: { id: true, name: true } });
+  const existingSquadNames = new Set(existingSquads.map((s) => s.name));
+  console.log(`🌱 Found ${existingSquads.length} existing squads in database.`);
+
+  const starterSquads = [
       {
         name: 'LeetCode 75 & System Design',
         category: 'Competitive Coding',
@@ -165,6 +166,54 @@ async function main() {
           'Master Matrices, Vector Algebra & Probability 5-mark proofs',
           'Revise State Board blueprint high-weightage chapters',
           'Weekly mock model question paper test drill',
+        ],
+      },
+      {
+        name: 'TN State Board 12th Physics & Chemistry: Public Exam Mastery',
+        category: 'State Board / Matric',
+        subject: 'State Board 12th Physics & Chemistry',
+        description: 'Targeting 95+ in TN State Board & Matriculation Exams. 5-mark derivations, ray optics, electromagnetic induction, organic reactions, and electrochemistry.',
+        platform: 'Google Meet',
+        meetingUrl: 'https://meet.google.com/new',
+        schedule: 'Mon, Wed, Fri @ 6:30 PM IST',
+        maxMembers: 6,
+        bannerGradient: 'from-amber-600 to-emerald-900',
+        tasks: [
+          'Derive Cyclotron frequency, Transformer losses & Snell Law proofs',
+          'Revise Organic Named Reactions (Kolbe, Cannizzaro, Sandmeyer, Aldol)',
+          'Timed 45-min Book-Back & PTA model question paper drill',
+        ],
+      },
+      {
+        name: 'State Board & Matric 10th SSLC: Maths & Science Centum Club',
+        category: 'State Board / Matric',
+        subject: 'State Board / Matric 10th (SSLC)',
+        description: 'Targeting Centum (100/100) in 10th SSLC Board Exams. Practical geometry, coordinate geometry, trigonometry, physics laws, and life sciences.',
+        platform: 'Google Meet',
+        meetingUrl: 'https://meet.google.com/new',
+        schedule: 'Daily @ 6:00 PM IST',
+        maxMembers: 8,
+        bannerGradient: 'from-teal-600 to-blue-900',
+        tasks: [
+          'Practice Practical Geometry (Tangents & Triangles) and Graph drawing',
+          'Solve 10 Trigonometric identities & Heights and Distances problems',
+          'Revise Periodic Table, Chemical Bonding & Human anatomy diagrams',
+        ],
+      },
+      {
+        name: 'Matriculation 12th Biology & Computer Science Board Prep',
+        category: 'State Board / Matric',
+        subject: 'State Board / Matric 12th',
+        description: 'High-yield revision for Tamil Nadu & State Matriculation board: Botany genetics, Zoology physiology, Python programming, and SQL database queries.',
+        platform: 'Discord',
+        meetingUrl: 'https://discord.com',
+        schedule: 'Tue, Thu, Sat @ 7:30 PM IST',
+        maxMembers: 6,
+        bannerGradient: 'from-emerald-600 to-indigo-900',
+        tasks: [
+          'Revise Genetics & Biotechnology Mendelian dihybrid crosses',
+          'Write Python functions for text file handling & SQL database connection',
+          'Practice Previous 5 Years State Board Public Exam Question Papers',
         ],
       },
       {
@@ -441,7 +490,10 @@ async function main() {
       },
     ];
 
+    let newlyCreated = 0;
     for (const sq of starterSquads) {
+      if (existingSquadNames.has(sq.name)) continue;
+
       const { tasks, ...squadData } = sq;
       const createdSquad = await prisma.squad.create({
         data: {
@@ -461,9 +513,9 @@ async function main() {
           },
         });
       }
+      newlyCreated++;
     }
-    console.log('✅ Created 6 starter squads in database.');
-  }
+    console.log(`✅ Ensured study squads in database (created ${newlyCreated} missing squads).`);
 
   // Reassign any orphaned squads to the current user
   const allUsers = await prisma.user.findMany({ select: { id: true } });

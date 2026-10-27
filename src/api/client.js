@@ -7,15 +7,45 @@ const isLocalhost =
     window.location.hostname === '127.0.0.1' ||
     window.location.hostname === '[::1]');
 
-const rawApiUrl =
-  import.meta.env.VITE_API_URL ||
-  (isLocalhost
-    ? 'http://localhost:3001/api'
-    : typeof window !== 'undefined'
-    ? `${window.location.origin}/api`
-    : '/api');
+export const getApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (typeof window === 'undefined') {
+    return envUrl || 'http://localhost:3001/api';
+  }
 
-const API_BASE_URL = rawApiUrl.replace(/\/+$/, '');
+  // If running locally in browser
+  if (isLocalhost) {
+    return (envUrl || 'http://localhost:3001/api').replace(/\/+$/, '');
+  }
+
+  // Running on public cloud server (Render, Vercel, Railway, etc.)
+  // If a remote production API URL was explicitly provided, use it
+  if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+    return envUrl.replace(/\/+$/, '');
+  }
+
+  // Otherwise, use current public domain's /api endpoint
+  return `${window.location.origin}/api`;
+};
+
+export const getSocketUrl = () => {
+  const envSocket = import.meta.env.VITE_SOCKET_URL;
+  if (typeof window === 'undefined') {
+    return envSocket || 'http://localhost:3001';
+  }
+
+  if (isLocalhost) {
+    return (envSocket || 'http://localhost:3001').replace(/\/+$/, '');
+  }
+
+  if (envSocket && !envSocket.includes('localhost') && !envSocket.includes('127.0.0.1')) {
+    return envSocket.replace(/\/+$/, '');
+  }
+
+  return window.location.origin;
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -115,6 +145,14 @@ export const aiAPI = {
     client.post('/ai/squad-bot', params),
   chatWithDoc: (params) =>
     client.post('/ai/chat-doc', params),
+  vivaSimulator: (params) =>
+    client.post('/ai/viva-simulator', params),
+  generateCheatsheet: (params) =>
+    client.post('/ai/generate-cheatsheet', params),
+  feynmanExplain: (params) =>
+    client.post('/ai/feynman-explain', params),
+  codeAudit: (params) =>
+    client.post('/ai/code-audit', params),
 };
 
 // Study Session Calendar & Exam Countdown Endpoints

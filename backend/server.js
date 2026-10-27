@@ -24,7 +24,20 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
 
 const app = express();
+// Enable trust proxy for reverse proxies (Render, Vercel, Cloudflare, AWS)
+// This ensures rate limiting and logs use the real client IP, not the load balancer IP
+app.set('trust proxy', 1);
+
+// Prevent unhandled promise rejections or exceptions from crashing the server process
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [Server Guard] Unhandled Promise Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [Server Guard] Uncaught Exception:', err);
+});
+
 const server = http.createServer(app);
+
 
 // Parse allowed CORS origins from CLIENT_URL (supports comma-separated list or *)
 const rawOrigins = process.env.CLIENT_URL || '*';
@@ -90,7 +103,8 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Apply rate limiting
 app.use('/api', generalApiLimiter);
@@ -98,24 +112,6 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
 app.use('/api/ai', aiLimiter);
-
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/squads', squadRoutes);
-app.use('/api/ai', aiRoutes);
-app.use('/api/events', eventsRoutes);
-app.use('/api/payment', paymentRoutes);
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'StudySquad API is running healthy',
-    environment: process.env.NODE_ENV || 'development',
-    timestamp: new Date().toISOString(),
-  });
-});
-
 
 // In-Memory Presence Tracker: squadId -> Map<socketId, { id, name, avatar, joinedAt }>
 const activeSquadPresence = new Map();
@@ -150,7 +146,17 @@ const broadcastPresence = (squadId) => {
   io.emit('global_presence_update', summary);
 };
 
-// Live Presence API Endpoint
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'StudySquad API is running healthy',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Live Presence API Endpoint (Must be defined before /api/squads/:id)
 app.get('/api/squads/live-presence', (req, res) => {
   const summary = {};
   for (const [sId, map] of activeSquadPresence.entries()) {
@@ -164,8 +170,16 @@ app.get('/api/squads/live-presence', (req, res) => {
   res.json({ presence: summary });
 });
 
+// API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/squads', squadRoutes);
+app.use('/api/ai', aiRoutes);
+app.use('/api/events', eventsRoutes);
+app.use('/api/payment', paymentRoutes);
+
+
 // Serve uploaded lecture slides, notes, and study PDFs
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -350,7 +364,141 @@ io.on('connection', (socket) => {
     io.emit('calendar_sync', { squadId, action, event, eventId });
   });
 
+  // In-Memory Video Call Tracker: squadId -> Map<socketId, { user, audioMuted, videoMuted, isScreenSharing, isHandRaised }>
+  const activeVideoRooms = new Map();
+
+  // WebRTC In-Room Video Call Signaling
+  socket.on('join_video_call', ({ squadId, user, initialState }) => {
+    if (!squadId) return;
+    const videoRoomKey = `video_${squadId}`;
+    socket.join(videoRoomKey);
+
+    if (!activeVideoRooms.has(squadId)) {
+      activeVideoRooms.set(squadId, new Map());
+    }
+
+    const cleanUser = {
+      id: user?.id || 'guest-' + socket.id,
+      name: user?.name || 'Squad Member',
+      avatar: user?.avatar || '',
+    };
+
+    const peerInfo = {
+      user: cleanUser,
+      audioMuted: initialState?.audioMuted ?? false,
+      videoMuted: initialState?.videoMuted ?? false,
+      isScreenSharing: initialState?.isScreenSharing ?? false,
+      isHandRaised: initialState?.isHandRaised ?? false,
+      joinedAt: new Date().toISOString(),
+    };
+
+    const roomMap = activeVideoRooms.get(squadId);
+
+    // Collect all existing peers currently in the video call
+    const existingPeers = [];
+    for (const [peerSocketId, data] of roomMap.entries()) {
+      if (peerSocketId !== socket.id) {
+        existingPeers.push({
+          socketId: peerSocketId,
+          user: data.user,
+          audioMuted: data.audioMuted,
+          videoMuted: data.videoMuted,
+          isScreenSharing: data.isScreenSharing,
+          isHandRaised: data.isHandRaised,
+        });
+      }
+    }
+
+    // Save this socket to video room
+    roomMap.set(socket.id, peerInfo);
+
+    // Send existing peers to the newly joined peer
+    socket.emit('video_existing_peers', { peers: existingPeers });
+
+    // Notify other peers in this video room that a new peer joined
+    socket.to(videoRoomKey).emit('video_peer_joined', {
+      socketId: socket.id,
+      user: cleanUser,
+      ...peerInfo,
+    });
+
+    console.log(`📹 WebRTC: ${cleanUser.name} joined video call for squad ${squadId} (Total: ${roomMap.size})`);
+  });
+
+  // Relay WebRTC SDP Offers, Answers, and ICE Candidates between peers
+  socket.on('video_signal_send', ({ to, signal, user }) => {
+    if (!to || !signal) return;
+    io.to(to).emit('video_signal_receive', {
+      from: socket.id,
+      signal,
+      user,
+    });
+  });
+
+  // Relay peer state changes (mic mute, camera off, screen share, raise hand)
+  socket.on('video_peer_state', ({ squadId, audioMuted, videoMuted, isScreenSharing, isHandRaised }) => {
+    if (!squadId) return;
+    const roomMap = activeVideoRooms.get(squadId);
+    if (roomMap && roomMap.has(socket.id)) {
+      const prev = roomMap.get(socket.id);
+      roomMap.set(socket.id, {
+        ...prev,
+        audioMuted: audioMuted ?? prev.audioMuted,
+        videoMuted: videoMuted ?? prev.videoMuted,
+        isScreenSharing: isScreenSharing ?? prev.isScreenSharing,
+        isHandRaised: isHandRaised ?? prev.isHandRaised,
+      });
+    }
+
+    socket.to(`video_${squadId}`).emit('video_peer_state_changed', {
+      socketId: socket.id,
+      audioMuted,
+      videoMuted,
+      isScreenSharing,
+      isHandRaised,
+    });
+  });
+
+  // Relay live emoji reactions in video room
+  socket.on('video_send_reaction', ({ squadId, emoji, userName }) => {
+    if (!squadId || !emoji) return;
+    io.to(`video_${squadId}`).emit('video_receive_reaction', {
+      id: 'reaction-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      emoji,
+      userName: userName || 'Squad Mate',
+      socketId: socket.id,
+    });
+  });
+
+  // Leave Video Call explicitly
+  socket.on('leave_video_call', ({ squadId }) => {
+    if (!squadId) return;
+    const videoRoomKey = `video_${squadId}`;
+    socket.leave(videoRoomKey);
+
+    const roomMap = activeVideoRooms.get(squadId);
+    if (roomMap) {
+      roomMap.delete(socket.id);
+      if (roomMap.size === 0) {
+        activeVideoRooms.delete(squadId);
+      }
+    }
+
+    socket.to(videoRoomKey).emit('video_peer_left', { socketId: socket.id });
+  });
+
   socket.on('disconnect', () => {
+    // Clean up any active WebRTC video rooms this socket was participating in
+    for (const [squadId, roomMap] of activeVideoRooms.entries()) {
+      if (roomMap.has(socket.id)) {
+        roomMap.delete(socket.id);
+        socket.to(`video_${squadId}`).emit('video_peer_left', { socketId: socket.id });
+        if (roomMap.size === 0) {
+          activeVideoRooms.delete(squadId);
+        }
+      }
+    }
+
     const presence = socketPresenceMap.get(socket.id);
     if (presence) {
       const { squadId, user } = presence;

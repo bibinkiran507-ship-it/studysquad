@@ -4,11 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n \"frontend,backend\" -c \"cyan,magenta\" \"vite\" \"node --watch backend/server.js\"",
+    "dev:frontend": "vite",
     "backend": "node backend/server.js",
     "start": "node backend/server.js",
     "build": "vite build",
-    "render:build": "npm run build && cd backend && npm install && npm run prisma:push",
+    "render:build": "npm run build && cd backend && npm install && npm run prisma:push && npm run prisma:seed",
     "install:all": "npm install && cd backend && npm install",
     "lint": "oxlint",
     "preview": "vite preview"
@@ -29,6 +30,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.6",
     "oxlint": "^1.81.0",
     "vite": "^8.3.0"
   }

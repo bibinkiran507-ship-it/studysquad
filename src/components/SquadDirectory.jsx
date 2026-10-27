@@ -133,14 +133,14 @@ export default function SquadDirectory({
 
   const categories = [
     'All',
+    'State Board / Matric',
+    'CBSE 12th Boards',
+    'CBSE & ICSE Boards',
+    'Engineering & Tech',
     'Artificial Intelligence',
     'Python & Data Science',
     'Java Programming',
     'Competitive Coding',
-    'Engineering & Tech',
-    'CBSE 12th Boards',
-    'CBSE & ICSE Boards',
-    'State Board / Matric',
     'Arts & Humanities',
     'Commerce & Business',
     'GRE / GATE / GMAT',

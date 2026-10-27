@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mail, Lock, User, ArrowRight, Loader2,
-  Eye, EyeOff,
+  Eye, EyeOff, Sparkles,
 } from 'lucide-react';
 import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../context/AuthContext';
@@ -10,7 +10,7 @@ import { GoogleIcon } from './AuthModal';
 import BackgroundVideo from './BackgroundVideo';
 
 export default function LoginPage() {
-  const { login, register, loginWithGoogle } = useAuth();
+  const { login, register, loginWithGoogle, loginAsDemo } = useAuth();
 
   /* Form & Auth state */
   const [mode, setMode] = useState('login'); // 'login' | 'register'
@@ -218,6 +218,21 @@ export default function LoginPage() {
                     <span>Continue with Google</span>
                   </>
                 )}
+              </motion.button>
+
+              {/* Instant 1-Click Demo Preview Button */}
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.012 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  setError('');
+                  loginAsDemo();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold text-emerald-950 border border-emerald-500/40 bg-gradient-to-r from-emerald-400/20 via-teal-400/20 to-emerald-400/20 hover:from-emerald-400/30 hover:to-teal-400/30 transition-all cursor-pointer shadow-sm mb-4 select-none"
+              >
+                <Sparkles size={14} className="text-emerald-700 animate-pulse" />
+                <span>⚡ Instant Preview (Explore Squads & AI Free)</span>
               </motion.button>
 
               {/* Divider */}

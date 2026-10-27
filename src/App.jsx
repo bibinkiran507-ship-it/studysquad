@@ -17,7 +17,7 @@ import UserProfileModal from './components/UserProfileModal';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useTypewriter } from './hooks/useTypewriter';
-import { squadsAPI, aiAPI } from './api/client';
+import { squadsAPI, aiAPI, getSocketUrl } from './api/client';
 import { INITIAL_SQUADS } from './data/mockSquads';
 import { io } from 'socket.io-client';
 
@@ -53,11 +53,7 @@ function AppInner() {
       })
       .catch((err) => console.warn('Live presence fetch error:', err.message));
 
-    const socketUrl =
-      import.meta.env.VITE_SOCKET_URL ||
-      (import.meta.env.VITE_API_URL
-        ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '')
-        : window.location.origin);
+    const socketUrl = getSocketUrl();
 
     const socket = io(socketUrl, {
       transports: ['websocket', 'polling'],

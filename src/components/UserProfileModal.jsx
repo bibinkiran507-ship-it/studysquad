@@ -200,11 +200,9 @@ export default function UserProfileModal({ onOpenProModal }) {
               <div className="pb-1">
                 <div className="flex items-center gap-2">
                   <h2 className="text-white font-bold text-xl leading-tight">{user.name}</h2>
-                  {user.isPro && (
-                    <span className="px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-neutral-950 text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-sm">
-                      <Crown size={10} /> PRO
-                    </span>
-                  )}
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                    <Sparkles size={10} /> Full Access
+                  </span>
                 </div>
                 <p className="text-white/60 text-sm flex items-center gap-1 mt-0.5">
                   <Mail size={11} />
@@ -230,53 +228,26 @@ export default function UserProfileModal({ onOpenProModal }) {
 
           {/* Membership Status Bar */}
           <div className="px-6 mb-3">
-            <div
-              className={`p-3 rounded-2xl flex items-center justify-between border ${
-                user.isPro
-                  ? 'bg-gradient-to-r from-amber-500/10 via-yellow-500/10 to-amber-500/10 border-amber-400/40'
-                  : 'bg-neutral-50 border-neutral-200'
-              }`}
-            >
+            <div className="p-3 rounded-2xl flex items-center justify-between border bg-emerald-500/10 border-emerald-500/30">
               <div className="flex items-center gap-2.5">
-                <div
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                    user.isPro
-                      ? 'bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 shadow-xs'
-                      : 'bg-neutral-200 text-neutral-700'
-                  }`}
-                >
-                  <Crown size={15} />
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-emerald-500/20 text-emerald-600">
+                  <Sparkles size={15} />
                 </div>
                 <div>
                   <p className="text-xs font-bold text-neutral-900 flex items-center gap-1.5">
-                    {user.isPro ? 'StudySquad Pro Active' : 'Free Student Plan'}
-                    {user.isPro && (
-                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded-full capitalize">
-                        {user.proPlan || 'Annual'}
-                      </span>
-                    )}
+                    StudySquad Full Access
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded-full">
+                      Free for All Students
+                    </span>
                   </p>
                   <p className="text-[11px] text-neutral-500">
-                    {user.isPro
-                      ? 'All premium AI & priority rooms unlocked'
-                      : 'Upgrade for unlimited AI tutor & perks'}
+                    All 7 AI Academic Engines, Document Chat & Study Rooms Unlocked
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  closeProfile();
-                  if (onOpenProModal) onOpenProModal();
-                }}
-                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shrink-0 ${
-                  user.isPro
-                    ? 'bg-amber-400 hover:bg-amber-300 text-neutral-950 shadow-xs hover:scale-102'
-                    : 'bg-[#1C2E1E] hover:bg-[#2A442D] text-white shadow-xs hover:scale-102'
-                }`}
-              >
-                {user.isPro ? 'View Plans' : 'Upgrade to Pro'}
-              </button>
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/70 border border-emerald-300/60 px-2.5 py-1 rounded-xl">
+                Active
+              </span>
             </div>
           </div>
 

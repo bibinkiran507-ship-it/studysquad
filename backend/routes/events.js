@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import prisma from '../lib/prisma.js';
 import { generateWithGemini } from './ai.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -249,7 +249,7 @@ router.get('/:id/export-ics', async (req, res) => {
 });
 
 // POST /api/events/ai-study-plan - Generate exam prep countdown milestones with Gemini
-router.post('/ai-study-plan', requireAuth, async (req, res) => {
+router.post('/ai-study-plan', optionalAuth, async (req, res) => {
   try {
     const { examTitle, subject, examDate, daysLeft = 7, targetScore = 'A' } = req.body;
 

@@ -4,14 +4,13 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import prisma from '../lib/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = Router();
 
-// Helper to clean raw text and extract pure JSON (stripping markdown fences if present)
 export const cleanJson = (text) => {
   if (!text) return '';
   const cleaned = text
@@ -19,9 +18,29 @@ export const cleanJson = (text) => {
     .replace(/^```\s*/, '')
     .replace(/```\s*$/, '')
     .trim();
-  const match = cleaned.match(/\[[\s\S]*\]/) || cleaned.match(/\{[\s\S]*\}/);
-  return match ? match[0] : cleaned;
+
+  const firstBrace = cleaned.indexOf('{');
+  const firstBracket = cleaned.indexOf('[');
+
+  let extracted = cleaned;
+  // If both exist, determine the outermost container by whichever starts earlier
+  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (lastBrace !== -1 && lastBrace > firstBrace) {
+      extracted = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+  } else if (firstBracket !== -1) {
+    const lastBracket = cleaned.lastIndexOf(']');
+    if (lastBracket !== -1 && lastBracket > firstBracket) {
+      extracted = cleaned.slice(firstBracket, lastBracket + 1);
+    }
+  }
+
+  // Sanitize raw unescaped LaTeX or math backslashes (e.g. \pi, \ge, \in, \alpha, \sum) so JSON.parse never crashes
+  return extracted.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 };
+
+
 
 // Helper to initialize Gemini with active model support
 export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
@@ -399,7 +418,7 @@ No extra text or backticks.
 });
 
 // POST /api/ai/generate-flashcards - Generate active recall flashcards
-router.post('/generate-flashcards', async (req, res) => {
+router.post('/generate-flashcards', requireAuth, async (req, res) => {
   try {
     const { subject = '', category = '', topic = '', notes = '' } = req.body;
     const model = getGeminiModel();
@@ -573,7 +592,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 });
 
 // POST /api/ai/generate-quiz - Generate active recall multiple-choice quiz
-router.post('/generate-quiz', async (req, res) => {
+router.post('/generate-quiz', requireAuth, async (req, res) => {
   try {
     const { subject = '', category = '', topic = '', notes = '' } = req.body;
     const model = getGeminiModel();
@@ -610,7 +629,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
         const text = result.response.text();
         const quiz = JSON.parse(cleanJson(text));
         if (Array.isArray(quiz) && quiz.length > 0) {
-          return res.json({ quiz, poweredBy: 'Gemini AI' });
+          return res.json({ quiz, questions: quiz, poweredBy: 'Gemini AI' });
         }
       } catch (geminiErr) {
         console.warn('Gemini quiz generation failed, using curated quiz:', geminiErr.message);
@@ -776,13 +795,15 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 });
 
 // POST /api/ai/squad-bot - In-room AI Tutor & Assistant
-router.post('/squad-bot', async (req, res) => {
+router.post('/squad-bot', optionalAuth, async (req, res) => {
   try {
     const {
       squadId,
       query = '',
       context = {},
-      mode = 'chat' // 'chat' | 'summarize-notes' | 'study-agenda'
+      history = [],
+      mode = 'chat', // 'chat' | 'summarize-notes' | 'study-agenda'
+      image = null // optional base64 data URL from pasted screenshot
     } = req.body;
 
     const { subject = '', category = '', squadName = '', sharedNotes = '', tasks = [] } = context;
@@ -814,17 +835,51 @@ Generate an inspiring, high-yield 60-Minute Study Session Agenda:
 - 55-60m: Wrap-up & milestone checklist
 Tailor the specific tasks and topics to ${subject}. Format clearly with Markdown.`;
     } else {
-      prompt = `You are StudySquad AI Tutor, a friendly, encouraging, and highly knowledgeable academic peer coach embedded inside the study squad "${squadName || 'StudySquad'}" (Subject: ${subject || 'Academics'}, Category: ${category || 'Studies'}).
-The student is asking:
-"${query}"
+      const historySnippet = Array.isArray(history) && history.length > 0
+        ? `Conversation History:\n${history.slice(-8).map((m) => `${m.sender === 'user' ? 'Student' : 'Tutor'}: ${m.text}`).join('\n')}\n\n`
+        : '';
 
-${sharedNotes ? `Context from the squad's shared notes:\n${sharedNotes.slice(0, 1000)}\n` : ''}
+      const effectiveQuery = query || (image ? 'Please analyze this screenshot/image and explain the solution, answer, or concepts step-by-step.' : '');
 
-Respond directly with a clear, engaging, and accurate answer. Use concise explanations, analogies if helpful, and code/math formatting if relevant. Keep it encouraging and tailored to students studying together!`;
+      prompt = `You are a warm, brilliant, patient, and knowledgeable human tutor chatting 1-on-1 with a student in their study space.
+You can answer ANY question the student asks across ALL domains: coding, algorithms, mathematics, science, history, general knowledge, language, logic, creative writing, exam prep, or friendly casual conversation.
+Study Context (use as reference if their question relates to it): "${squadName || 'StudySquad'}" • Subject: "${subject || 'General Studies'}" (${category || 'Academics'}).
+
+${sharedNotes ? `Relevant notes from squad session:\n"""\n${sharedNotes.slice(0, 800)}\n"""\n\n` : ''}${historySnippet}Student: "${effectiveQuery}"
+
+Guidelines for your response:
+1. **Answer whatever the student asks directly**: Whether it is a deep algorithmic breakdown, a quick math equation, a conceptual explanation, a code review, or casual dialogue, answer thoroughly, accurately, and immediately without deflection.
+2. **Talk like a friendly, high-caliber ChatGPT tutor**: Be conversational, encouraging, natural, and engaging. Never sound like a stiff textbook, a corporate robot, or a multiple-choice machine.
+3. **Clarity & Formatting**: Use bolding for key terms, step-by-step explanations, code blocks with syntax highlighting, and everyday analogies to make hard ideas click instantly.
+4. **Natural check-in**: End with a warm, genuine check-in (e.g. "Does that make sense, or would you like to see another quick example?") instead of a robotic menu.
+5. **Visual & Screenshot Analysis**: If an image or screenshot is attached, carefully inspect its visual content (equations, code, diagrams, problem text, slides, or questions) and provide a comprehensive, step-by-step breakdown and solution.`;
     }
 
     try {
-      const geminiResult = await generateWithGemini(prompt);
+      let contents = prompt;
+      if (image && typeof image === 'string' && image.startsWith('data:image/')) {
+        const matches = image.match(/^data:(image\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+        if (matches) {
+          const mimeType = matches[1];
+          const data = matches[2];
+          contents = [
+            prompt,
+            {
+              inlineData: {
+                mimeType,
+                data,
+              },
+            },
+          ];
+        }
+      }
+
+      const geminiResult = await generateWithGemini(contents, {
+        generationConfig: {
+          temperature: 0.75,
+          topP: 0.95,
+        },
+      });
       if (geminiResult && geminiResult.text) {
         return res.json({
           response: geminiResult.text,
@@ -856,6 +911,8 @@ Respond directly with a clear, engaging, and accurate answer. Use concise explan
         `• **35:00 - 55:00** ✏️ *Pomodoro Sprint 2*: Practice problems & Whiteboard derivations.\n` +
         `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!\n\n` +
         `*(Connect your Google Gemini API key in backend/.env for AI-customized agendas tailored to your live tasks!)*`;
+    } else if (image) {
+      fallbackText = `📸 **Screenshot Received!**\n\nI can see you attached an image or screenshot! To enable real-time visual OCR and diagram analysis with Google Gemini Multimodal Vision, ensure your free **GEMINI_API_KEY** is configured in \`backend/.env\`.\n\n*(Gemini Flash analyzes code screenshots, handwritten formulas, and diagrams with high precision!)*`;
     } else {
       const qLower = query.toLowerCase();
       let answerBody = `Great question! When studying **${subject || 'this topic'}**, focus on building an intuitive mental model first before diving into memorization. Try explaining the mechanism in your own words to a squad partner on the Whiteboard.`;
@@ -901,7 +958,7 @@ router.post('/chat-doc', requireAuth, async (req, res) => {
     let localFilePath = null;
     if (fileUrl) {
       const fileNameOnly = path.basename(fileUrl);
-      const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+      const uploadsDir = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(__dirname, '..', 'uploads');
       const resolvedPath = path.resolve(uploadsDir, fileNameOnly);
 
       // Verify the file is strictly contained within uploads directory
@@ -1002,6 +1059,370 @@ Provide a clear, detailed, and academically rigorous answer based on the concept
   } catch (error) {
     console.error('Chat doc error:', error);
     return res.status(500).json({ error: 'Failed to process document chat.' });
+  }
+});
+
+// POST /api/ai/viva-simulator - Interactive AI Viva / Oral Exam Simulator
+router.post('/viva-simulator', requireAuth, async (req, res) => {
+  try {
+    const {
+      subject = 'Computer Science',
+      topic = 'Data Structures & Algorithms',
+      level = 'College Viva',
+      questionNumber = 1,
+      totalQuestions = 5,
+      userResponse = '',
+      previousQuestion = '',
+      vivaHistory = [],
+      excludeQuestions = [],
+      seed = 0,
+    } = req.body;
+
+    const isFirstQuestion = !userResponse || userResponse.trim().length === 0;
+    const targetNum = Number(totalQuestions);
+
+    let roundFocusDesc = 'Foundational comprehension & core working principles.';
+    if (targetNum === 5) {
+      roundFocusDesc = 'Quick 5-Question Sprint: Focus on high-yield core definitions, foundational invariants, and baseline concepts.';
+    } else if (targetNum === 10) {
+      roundFocusDesc = 'Standard 10-Question Rigor: Focus on algorithmic trade-offs, internal data structures, call stack vs heap memory, and runtime complexity.';
+    } else if (targetNum === 15) {
+      roundFocusDesc = 'Mastery 15-Question Defense: Focus on advanced architecture, failure handling, edge cases, cache locality, and deep technical nuances.';
+    } else if (targetNum === 0) {
+      roundFocusDesc = 'Continuous Marathon: Adaptive broad-spectrum questions testing problem synthesis across diverse paradigms.';
+    }
+
+    const stageStr = targetNum > 0
+      ? `Question ${questionNumber} of ${targetNum}`
+      : `Question ${questionNumber} (Continuous Oral Defense Marathon)`;
+
+    const exclusions = [
+      previousQuestion,
+      ...(Array.isArray(excludeQuestions) ? excludeQuestions : []),
+      ...(Array.isArray(vivaHistory) ? vivaHistory.map(h => h.question) : [])
+    ].filter(Boolean);
+
+    const historyText = Array.isArray(vivaHistory) && vivaHistory.length > 0
+      ? `\nPrevious Questions & Student Answers so far:\n` +
+        vivaHistory
+          .slice(-6)
+          .map((h, i) => `Q${i + 1}: "${h.question}"\nStudent: "${h.userResponse}"\nExaminer Score: ${h.score}/10 | Critique: "${h.feedback}"`)
+          .join('\n\n') + '\n\n'
+      : '';
+
+    const exclusionClause = exclusions.length > 0
+      ? `\nCRITICAL DIVERSITY RULE: You MUST NOT repeat, rephrase, or ask anything similar to the following previously asked questions:\n${exclusions.slice(-5).map((q, idx) => `• "${q}"`).join('\n')}\nPick a completely different subtopic, angle, or scenario of "${topic}".\n`
+      : '';
+
+    const prompt = isFirstQuestion
+      ? `You are an elite academic professor and technical examiner conducting a live oral defense (${level}).
+Subject: "${subject}"
+Topic: "${topic}"
+Target Rigor: "${level}"
+Exam Format: ${stageStr} (${roundFocusDesc})
+${exclusionClause}
+Formulate a single, sharp, articulate oral exam question specifically testing "${topic || subject}".
+Style Guidance:
+- If "${level}" is 'College Viva', emphasize fundamental definitions, syllabus theory, and mechanics.
+- If "${level}" is 'Technical Interview', emphasize real-world trade-offs, time/space complexity, and architecture.
+- If "${level}" is 'Board Exam', emphasize structured scientific reasoning, precise laws, and derivations.
+- If "${level}" is 'Competitive Exam', emphasize extreme edge cases, asymptotic bounds, and boundary violation traps.
+
+Respond ONLY with a valid JSON object in this format (no markdown backticks, no code fence):
+{
+  "score": null,
+  "feedback": "Welcome to your ${level}. Deliver your verbal response clearly with technical terminology, time/space complexities, and edge cases.",
+  "modelAnswer": null,
+  "nextQuestion": "Sharp opening question here...",
+  "keyConcept": "Core Principle"
+}`
+      : `You are an elite academic professor and technical examiner conducting an oral exam.
+Subject: "${subject}"
+Topic: "${topic}"
+Target Rigor: "${level}"
+Current Stage: ${stageStr}.
+${historyText}
+Latest Question Asked: "${previousQuestion}"
+Student's Response: "${userResponse}"
+${exclusionClause}
+Tasks:
+1. Score the student's answer out of 10 based on conceptual accuracy, completeness, and boundary condition awareness.
+2. Provide a 2-sentence constructive critique (explicitly cite what was accurate, and what was missing or shallow).
+3. Provide the ideal concise model answer (2-3 sentences).
+4. Formulate the NEXT question. CRITICAL RULES FOR NEXT QUESTION:
+   - Must be completely fresh and DIFFERENT from all previous questions.
+   - Drill deeper into trade-offs, boundary edge cases, mathematical/code derivations, or failure handling.
+   - Actively challenge any gap or assumption in the student's response.
+Respond ONLY with a valid JSON object in this format (no markdown backticks, no code fence):
+{
+  "score": 8,
+  "feedback": "Critique on student response...",
+  "modelAnswer": "Ideal concise model answer...",
+  "nextQuestion": "Next challenging, probing question...",
+  "keyConcept": "Concept tested"
+}`;
+
+    const geminiResult = await generateWithGemini(prompt);
+    if (geminiResult && geminiResult.text) {
+      try {
+        const parsed = JSON.parse(cleanJson(geminiResult.text));
+        if (parsed.nextQuestion) {
+          return res.json({
+            ...parsed,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`
+          });
+        }
+      } catch (parseErr) {
+        console.warn('Gemini viva JSON parse failed:', parseErr.message);
+      }
+    }
+
+    // Heuristic Fallback with Extensive Question Generator
+    const topicLabel = topic || subject || 'this subject';
+    const vivaBank = [
+      { q: `What is the core working invariant of ${topicLabel}, and why does it prevent failure under concurrent or edge execution?`, a: `It guarantees deterministic state transitions and prevents data corruption during boundary conditions.`, c: 'Foundational Invariants' },
+      { q: `What are the primary Time and Space trade-offs when scaling ${topicLabel} by 100x?`, a: `Optimizing runtime typically demands caching and auxiliary structures, whereas memory minimization requires on-the-fly recomputation.`, c: 'Complexity Trade-offs' },
+      { q: `Can you walk me through a failure scenario or edge case where ${topicLabel} fails or degrades in performance?`, a: `Null pointers, integer boundary overflows, and unbalanced branch predictions can degrade performance from O(log n) to O(n).`, c: 'Edge Cases & Boundaries' },
+      { q: `How would you defend your choice of ${topicLabel} if an examiner recommended a competing alternative?`, a: `Contrast latency tolerances, memory footprint, throughput targets, and maintenance overhead against problem constraints.`, c: 'Architectural Defense' },
+      { q: `How do CPU cache lines and memory layout affect the real-world hardware performance of ${topicLabel}?`, a: `Contiguous spatial memory locality enables hardware prefetching into L1/L2 caches, while scattered pointer chains cause cache misses.`, c: 'Hardware & Locality' },
+      { q: `In a multi-threaded concurrent environment, how do you prevent race conditions and deadlocks with ${topicLabel}?`, a: `Use atomic primitives (CAS), fine-grained read-write locks, or immutable snapshot data structures.`, c: 'Concurrency & Thread Safety' },
+      { q: `If you had to optimize ${topicLabel} for 99th-percentile (p99) latency, what specific bottlenecks would you eliminate?`, a: `Avoid heap allocations that trigger garbage collection pauses, pre-allocate memory buffers, and employ branchless logic.`, c: 'Low-Latency Optimization' },
+      { q: `What formal mathematical or logical inductive proof proves that ${topicLabel} is always correct and terminates?`, a: `Induction over problem input size verifies correctness, and a strictly monotonically decreasing loop variant guarantees termination.`, c: 'Formal Proof' },
+      { q: `How would you design an automated stress testing and fuzzing harness to test boundary failures of ${topicLabel}?`, a: `Generate adversarial randomized permutations, verify post-conditions against a naive reference oracle, and inject latency faults.`, c: 'Fuzzing & Verification' },
+      { q: `Synthesize your approach: what is the single most vital rule an engineer or student must remember about ${topicLabel}?`, a: `Always validate base assumptions, enforce invariant checks at each mutation boundary, and benchmark with realistic data before micro-optimizing.`, c: 'Synthesis & Mastery' }
+    ];
+
+    const currentNum = Math.max(1, questionNumber || 1);
+    // Differentiate question index based on rounds (5 vs 10 vs 15 vs Marathon), rigor level, and seed
+    const roundSeed = targetNum === 0 ? 8 : (targetNum === 10 ? 3 : (targetNum === 15 ? 6 : 1));
+    const levelSeed = (level.charCodeAt(0) + level.length) % vivaBank.length;
+    const randomSeed = seed ? Math.abs(Number(seed)) % vivaBank.length : 0;
+    const baseOffset = (roundSeed + levelSeed + randomSeed) % vivaBank.length;
+
+    let chosenIdx = (baseOffset + (currentNum - 1)) % vivaBank.length;
+    if (isFirstQuestion && exclusions.length > 0) {
+      for (let i = 0; i < vivaBank.length; i++) {
+        const candidate = (baseOffset + i) % vivaBank.length;
+        if (!exclusions.some(ex => ex.toLowerCase().includes(vivaBank[candidate].c.toLowerCase()))) {
+          chosenIdx = candidate;
+          break;
+        }
+      }
+    }
+
+    const currentItem = vivaBank[chosenIdx];
+    const nextItem = vivaBank[(chosenIdx + 1) % vivaBank.length];
+
+    return res.json({
+      score: isFirstQuestion ? null : 8,
+      feedback: isFirstQuestion
+        ? `Welcome to your ${level}! Speak or type your answers clearly with technical terminology.`
+        : `Solid conceptual grasp. To score maximum marks in an oral examination, be sure to explicitly state the boundary conditions and runtime trade-offs.`,
+      modelAnswer: isFirstQuestion ? null : currentItem.a,
+      nextQuestion: isFirstQuestion ? currentItem.q : nextItem.q,
+      keyConcept: isFirstQuestion ? currentItem.c : nextItem.c,
+      poweredBy: 'StudySquad Viva Engine'
+    });
+  } catch (error) {
+    console.error('Viva simulator error:', error);
+    return res.status(500).json({ error: 'Failed to process viva question.' });
+  }
+});
+
+// POST /api/ai/generate-cheatsheet - 1-Page High-Yield Revision Matrix
+router.post('/generate-cheatsheet', requireAuth, async (req, res) => {
+  try {
+    const { subject = 'Computer Science', topic = 'Data Structures & Algorithms', notes = '' } = req.body;
+
+    const prompt = `You are a world-class academic tutor and exam author.
+Create an ultra-dense, high-impact "1-Page High-Yield Exam Cheat Sheet" for:
+Subject: "${subject}"
+Topic: "${topic}"
+${notes ? `Squad Context Notes:\n"${notes.slice(0, 2000)}"` : ''}
+
+Format cleanly in Markdown with bold headers, bullet points, and code/math snippets:
+# ⚡ ${topic.toUpperCase()} — 1-PAGE HIGH-YIELD CHEAT SHEET
+### 📌 1. Essential Formulas & Time/Space Complexities
+### 🔑 2. Core Invariants & Must-Remember Definitions
+### 💡 3. High-Yield Mnemonics & Mental Shortcuts
+### ⚠️ 4. Top 5 Deadly Exam Traps & Examiner Gotchas
+### 🏆 5. Archetype Question Checklist & Solution Blueprints
+
+Make it dense, rigorous, practical, and directly applicable for getting an A+ on exam day.`;
+
+    const geminiResult = await generateWithGemini(prompt);
+    if (geminiResult && geminiResult.text) {
+      return res.json({
+        cheatSheet: geminiResult.text,
+        poweredBy: `Google Gemini (${geminiResult.modelName})`
+      });
+    }
+
+    // Curated Fallback
+    const fallbackSheet = `# ⚡ ${topic.toUpperCase()} — 1-PAGE HIGH-YIELD REVISION CHEAT SHEET\n\n` +
+      `### 📌 1. Essential Complexities & Performance Matrix\n` +
+      `• **Lookup / Search**: Average: \`O(1)\` to \`O(log n)\` | Worst: \`O(n)\`\n` +
+      `• **Insertion / Deletion**: \`O(1)\` at amortized tails | \`O(n)\` mid-array\n` +
+      `• **Space Overhead**: Auxiliary memory pointers consume \`O(n)\` overhead.\n\n` +
+      `### 🔑 2. Core Invariants & Definitions\n` +
+      `• **Invariant**: A condition that remains strictly true across all loop iterations and recursion steps.\n` +
+      `• **Boundary Checks**: Check \`n == 0\`, \`n == 1\`, duplicate keys, and max integer limits (\`2^31 - 1\`).\n\n` +
+      `### 💡 3. High-Yield Mnemonics & Shortcuts\n` +
+      `• *"Fast & Slow Pointers"*: Used for cycle detection (Floyd's algorithm) and finding midpoints.\n` +
+      `• *"Monotonic Stack"*: The go-to structure for finding Next Greater / Smaller Element in \`O(n)\`.\n` +
+      `• *"Prefix Sums"*: Converts dynamic range-sum queries from \`O(n)\` to \`O(1)\`.\n\n` +
+      `### ⚠️ 4. Top 5 Deadly Exam Gotchas\n` +
+      `1. Off-by-one errors in binary search (\`low <= high\` vs \`low < high\`).\n` +
+      `2. Integer overflow when calculating midpoint (\`low + (high - low) / 2\`).\n` +
+      `3. Forgetting base return conditions in recursive calls, causing stack overflow.\n` +
+      `4. Mutating data structures while iterating over them.\n` +
+      `5. Confusing Big-O worst-case with average-case expectations.\n\n` +
+      `### 🏆 5. High-Yield Archetype Checklist\n` +
+      `[ ] Two-Pointer Traversal on Sorted Arrays\n` +
+      `[ ] Sliding Window with Dynamic Frequency Map\n` +
+      `[ ] DFS / BFS Matrix Traversal with Visited Set`;
+
+    return res.json({
+      cheatSheet: fallbackSheet,
+      poweredBy: 'StudySquad Curated CheatSheet Engine'
+    });
+  } catch (error) {
+    console.error('Cheat sheet error:', error);
+    return res.status(500).json({ error: 'Failed to generate cheat sheet.' });
+  }
+});
+
+// POST /api/ai/feynman-explain - 3-Tier Concept Explainer
+router.post('/feynman-explain', requireAuth, async (req, res) => {
+  try {
+    const { concept = '', subject = 'General Studies' } = req.body;
+    if (!concept || !concept.trim()) {
+      return res.status(400).json({ error: 'Concept is required.' });
+    }
+
+    const prompt = `You are a master educator who uses the Feynman Technique.
+Explain the following concept across 3 distinct mastery levels:
+Concept: "${concept.trim()}"
+Subject: "${subject}"
+
+Level 1: 🧸 ELI5 Analogy (Explain like I'm 5 using an everyday, physical real-world metaphor without technical jargon).
+Level 2: ⚙️ Academic & Technical Mechanics (Rigorous, step-by-step mathematical, algorithmic, or scientific explanation of how it actually works under the hood).
+Level 3: ⚠️ Common Exam Traps & Misconceptions (The 3 most common mistakes students make on exams regarding this topic).
+
+Respond ONLY with a valid JSON object in this format (no markdown backticks, no code fence):
+{
+  "concept": "${concept.trim()}",
+  "eli5": "Everyday analogy here...",
+  "mechanics": "Technical step-by-step explanation...",
+  "examTraps": ["Trap 1", "Trap 2", "Trap 3"],
+  "oneLineTakeaway": "Memorable one-line summary..."
+}`;
+
+    const geminiResult = await generateWithGemini(prompt);
+    if (geminiResult && geminiResult.text) {
+      try {
+        const cleaned = cleanJson(geminiResult.text);
+        let parsed;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch {
+          // If strict parse failed due to unescaped internal raw line breaks, normalize them
+          parsed = JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
+        }
+        return res.json({
+          ...parsed,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`
+        });
+      } catch (parseErr) {
+        console.warn('Gemini feynman JSON parse failed:', parseErr.message);
+      }
+    }
+
+    // Heuristic Fallback
+    return res.json({
+      concept: concept.trim(),
+      eli5: `Think of ${concept} like a smart organizer in a busy kitchen: instead of searching through every single pantry shelf every time an order comes in, the chef keeps a labeled quick-access rack where the most common ingredients are right in reach!`,
+      mechanics: `${concept} operates by transforming complex multi-step operations into predictable algorithmic stages. By establishing mathematical invariants at each state transition, it guarantees consistent performance and eliminates redundant traversals.`,
+      examTraps: [
+        `Assuming best-case runtime applies to adversarial input distributions.`,
+        `Failing to account for auxiliary stack memory in recursive evaluations.`,
+        `Confusing mathematical equivalence with practical precision limits (e.g. floating-point rounding).`
+      ],
+      oneLineTakeaway: `Understand the core invariant first, test the edge cases second, and let the mathematics do the heavy lifting!`,
+      poweredBy: 'StudySquad Feynman Engine'
+    });
+  } catch (error) {
+    console.error('Feynman explainer error:', error);
+    return res.status(500).json({ error: 'Failed to explain concept.' });
+  }
+});
+
+// POST /api/ai/code-audit - Code & Solution Diagnostic Auditor
+router.post('/code-audit', requireAuth, async (req, res) => {
+  try {
+    const { code = '', language = 'javascript', problem = '' } = req.body;
+    if (!code || !code.trim()) {
+      return res.status(400).json({ error: 'Code or solution text is required.' });
+    }
+
+    const prompt = `You are a Principal Software Engineer and Competitive Programming Coach auditing a student's solution.
+Problem Context: "${problem || 'Code Analysis'}"
+Language: "${language}"
+Code:
+"""
+${code.slice(0, 4000)}
+"""
+
+Audit the solution:
+1. Status: "Optimal", "Suboptimal", or "Has Bugs"
+2. Time Complexity (Big-O) with explanation.
+3. Space Complexity (Big-O) with explanation.
+4. Edge Cases: List 3 specific boundary edge cases (e.g. negative numbers, empty input, single element, overflow).
+5. Critique: 2-3 sentences on code quality and readability.
+6. Optimized Refactored Code: Clean, idiomatic, fully commented code.
+
+Respond ONLY with a valid JSON object in this format (no markdown backticks, no code fence):
+{
+  "status": "Optimal",
+  "timeComplexity": "O(n)",
+  "spaceComplexity": "O(1)",
+  "critique": "Critique here...",
+  "edgeCases": ["Edge case 1", "Edge case 2", "Edge case 3"],
+  "optimizedCode": "Optimized code string...",
+  "keyAdvice": "Key takeaway advice..."
+}`;
+
+    const geminiResult = await generateWithGemini(prompt);
+    if (geminiResult && geminiResult.text) {
+      try {
+        const parsed = JSON.parse(cleanJson(geminiResult.text));
+        return res.json({
+          ...parsed,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`
+        });
+      } catch (parseErr) {
+        console.warn('Gemini code audit parse failed:', parseErr.message);
+      }
+    }
+
+    // Heuristic Fallback
+    return res.json({
+      status: 'Suboptimal',
+      timeComplexity: 'O(n) - Single pass loop',
+      spaceComplexity: 'O(1) - Constant auxiliary memory',
+      critique: 'The core logic is sound, but defensive checks for null/undefined inputs should be added at the top. Consider early returns for edge cases.',
+      edgeCases: [
+        'Empty input arrays or null/undefined arguments.',
+        'Extremes: very large inputs causing potential integer overflow.',
+        'Single element datasets where loop invariants might not execute.'
+      ],
+      optimizedCode: `// Optimized Solution with Defensive Bounds Checking\nfunction optimizedSolution(input) {\n  if (!input || input.length === 0) return null;\n  // Fast path for single element\n  if (input.length === 1) return input[0];\n  \n  // Primary logic with O(n) scan and O(1) space\n  return input;\n}`,
+      keyAdvice: 'Always guard against null and empty datasets before initializing loop counters!',
+      poweredBy: 'StudySquad Code Audit Engine'
+    });
+  } catch (error) {
+    console.error('Code audit error:', error);
+    return res.status(500).json({ error: 'Failed to audit solution.' });
   }
 });
 

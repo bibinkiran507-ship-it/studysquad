@@ -8,11 +8,11 @@ import {
   Zap,
   BookOpen,
   Lock,
-  Download,
   ShieldCheck,
   Loader2,
   ArrowRight,
   Flame,
+  Bot,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { paymentAPI } from '../api/client';
@@ -132,34 +132,39 @@ export default function UpgradeProModal({ isOpen, onClose }) {
 
   const PRO_PERKS = [
     {
-      icon: Crown,
-      title: '👑 Gold PRO Badge',
-      desc: 'Stand out across all study squads and the community directory.',
+      icon: Bot,
+      title: '🤖 24/7 AI Study Copilot & Tutor',
+      desc: 'Conversational ChatGPT & Gemini academic tutor for problem solving, math derivations & code debugging.',
     },
     {
-      icon: Zap,
-      title: '⚡ Unlimited Gemini AI Tutor',
-      desc: 'Ask unlimited academic questions without any daily rate limits.',
+      icon: Sparkles,
+      title: '🎙️ AI Mock Viva & Oral Examiner',
+      desc: 'Interactive oral interview simulator with real-time scoring (1-10) and examiner feedback.',
     },
     {
       icon: BookOpen,
-      title: '📄 Lecture PDF & Slides AI Chat',
-      desc: 'Upload 30MB textbooks or lecture slides and chat with them natively.',
+      title: '⚡ 1-Page High-Yield Cheat Sheets',
+      desc: 'Instant synthesis of formulas, invariants, and exam traps into dense revision sheets.',
     },
     {
-      icon: Lock,
-      title: '🔒 Private Study Squads',
-      desc: 'Create invite-only, password-protected private squads for your group.',
-    },
-    {
-      icon: Download,
-      title: '🎨 High-Res Whiteboard Exports',
-      desc: 'Export infinite collaborative canvas notes in crystal-clear 4K PNG.',
+      icon: Zap,
+      title: '💡 Feynman 3-Tier Concept Explainer',
+      desc: 'Master complex concepts via ELI5 analogies, academic derivations, and exam gotchas.',
     },
     {
       icon: ShieldCheck,
-      title: '🚀 Priority High-Bandwidth Video',
-      desc: 'Lowest latency WebRTC & screen share bandwidth for live sessions.',
+      title: '🛠️ AI Code & Solution Auditor',
+      desc: 'Big-O complexity analyzer, hidden edge-case scanner, and optimized refactored solutions.',
+    },
+    {
+      icon: Crown,
+      title: '🎴 Unlimited 3D Flashcards & Quizzes',
+      desc: 'Unlimited Google Gemini active recall decks and auto-graded practice exams.',
+    },
+    {
+      icon: Lock,
+      title: '📄 Lecture PDF & Slides AI Chat',
+      desc: 'Upload 30MB textbooks, notes, and lecture slides with deep multimodal AI Q&A.',
     },
   ];
 

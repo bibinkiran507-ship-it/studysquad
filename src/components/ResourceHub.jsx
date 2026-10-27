@@ -430,19 +430,6 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
       return;
     }
 
-    if (!user.isPro) {
-      if (onOpenProModal) onOpenProModal();
-      setMessages((prev) => [
-        ...prev,
-        { role: 'user', content: q },
-        {
-          role: 'assistant',
-          content: '🔒 **StudySquad Pro Feature**: Chatting with lecture slide decks and PDFs is unlocked for Pro members.\n\nPlease **Upgrade to StudySquad Pro (₹199/mo)** to unlock unlimited Google Gemini AI lecture document analysis.',
-        }
-      ]);
-      return;
-    }
-
     const userMsg = { role: 'user', content: q };
     setMessages((prev) => [...prev, userMsg]);
     setInputQuery('');

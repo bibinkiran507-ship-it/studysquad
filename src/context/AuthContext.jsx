@@ -108,6 +108,27 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const loginAsDemo = async () => {
+    const demoUser = {
+      id: 'demo-student-1',
+      name: 'Demo Student',
+      email: 'student.demo@studysquad.io',
+      avatar: 'https://api.dicebear.com/7.x/adventurer/svg?seed=DemoStudent',
+      bio: 'Exploring StudySquad collaborative study rooms',
+      pomodoroSessions: 4,
+      squadsJoined: 2,
+      isEmailVerified: true,
+      isPro: false,
+      createdAt: new Date().toISOString(),
+    };
+    const demoToken = `mock-demo-jwt-${Date.now()}`;
+    localStorage.setItem('studysquad_token', demoToken);
+    setToken(demoToken);
+    setUser(demoUser);
+    setIsAuthModalOpen(false);
+    return demoUser;
+  };
+
   const openAuthModal = (mode = 'login') => {
     setAuthMode(mode);
     setIsAuthModalOpen(true);
@@ -133,6 +154,7 @@ export const AuthProvider = ({ children }) => {
         login,
         register,
         loginWithGoogle,
+        loginAsDemo,
         logout,
         updateProfile,
         refreshUser,

@@ -121,28 +121,7 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
             </button>
           )}
 
-          {/* Pro Upgrade / Pro Member Badge */}
-          {user?.isPro ? (
-            <button
-              type="button"
-              onClick={onOpenProModal}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-neutral-950 text-xs font-black shadow-xs transition-all cursor-pointer hover:scale-102"
-              title="Click to view Pro plan details & active benefits"
-            >
-              <Crown className="w-3.5 h-3.5 text-neutral-950" />
-              <span>PRO MEMBER</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onOpenProModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500/15 via-yellow-500/15 to-amber-500/15 border border-amber-400/60 hover:border-amber-400 text-xs sm:text-sm font-bold text-amber-900 hover:text-amber-950 shadow-xs transition-all cursor-pointer hover:scale-102"
-              title="Unlock Unlimited AI Tutor, PDF Chat & Private Squads"
-            >
-              <Crown className="w-4 h-4 text-amber-600" />
-              <span>Upgrade to Pro</span>
-            </button>
-          )}
+
 
           {/* Calendar & Exam Countdown Trigger */}
           <button
@@ -153,6 +132,18 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
           >
             <CalendarIcon className="w-4 h-4 text-emerald-700" />
             <span>Calendar & Exams</span>
+          </button>
+
+
+          {/* StudySquad Pro Commercial SaaS Trigger */}
+          <button
+            type="button"
+            onClick={onOpenProModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-400/25 via-amber-300/35 to-yellow-400/25 hover:from-amber-400/40 hover:to-yellow-400/40 border border-amber-500/40 text-xs sm:text-sm font-bold text-amber-950 shadow-xs transition-all hover:scale-103 cursor-pointer"
+            title="StudySquad Pro - Unlock Unlimited AI, Oral Viva Examiner & Formulas"
+          >
+            <Crown className="w-4 h-4 text-amber-600 fill-amber-400" />
+            <span>{user?.isPro ? 'Pro Member' : 'Upgrade to Pro'}</span>
           </button>
 
           <button
@@ -275,13 +266,27 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
             Calendar & Exams
           </button>
 
+
+          {/* Mobile Upgrade Pro Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsMobileMenuOpen(false);
+              if (onOpenProModal) onOpenProModal();
+            }}
+            className="mt-2 bg-gradient-to-r from-amber-400/30 to-yellow-400/30 border border-amber-500/50 text-amber-950 px-6 py-2.5 rounded-full text-base font-bold inline-flex items-center gap-2 shadow-xs"
+          >
+            <Crown className="w-4 h-4 text-amber-600 fill-amber-400" />
+            <span>{user?.isPro ? 'Pro Member' : 'Upgrade to Pro'}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
               setIsMobileMenuOpen(false);
               handleCreateClick();
             }}
-            className="mt-3 bg-[#1C2E1E] text-white px-6 py-3 rounded-full text-lg font-medium inline-flex items-center gap-2"
+            className="mt-2 bg-[#1C2E1E] text-white px-6 py-3 rounded-full text-lg font-medium inline-flex items-center gap-2"
           >
             <Plus className="w-5 h-5" />
             Create Squad

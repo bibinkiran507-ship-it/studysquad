@@ -58,6 +58,8 @@ git push -u origin main
    * `CLIENT_URL`: `*`
    * `GEMINI_API_KEY`: *(optional, for AI study goals & matching)*
    * `GOOGLE_CLIENT_ID`: *(optional, for Google Sign-In)*
+   * `RAZORPAY_KEY_ID`: *(from Razorpay Dashboard -> API Keys, e.g. rzp_test_... or rzp_live_...)*
+   * `RAZORPAY_KEY_SECRET`: *(from Razorpay Dashboard -> API Keys)*
 5. Click **Create Web Service**. Render will deploy your application and give you a live URL like `https://studysquad-live.onrender.com`!
 
 ---
@@ -79,6 +81,8 @@ git push -u origin main
    * `DATABASE_URL`: `postgresql://...`
    * `JWT_SECRET`: `your_jwt_secret`
    * `CLIENT_URL`: `https://your-frontend.vercel.app`
+   * `RAZORPAY_KEY_ID`: `your_razorpay_key_id`
+   * `RAZORPAY_KEY_SECRET`: `your_razorpay_key_secret`
 
 ### Frontend (Vercel):
 1. Import repository in [Vercel](https://vercel.com).

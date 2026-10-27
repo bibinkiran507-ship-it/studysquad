@@ -32,6 +32,8 @@ backend/prisma/*.db-journal
 # Uploaded lecture files (Optional, keep uploads directory)
 backend/uploads/*
 !backend/uploads/.gitkeep
+uploads/*
+!uploads/.gitkeep
 
 # Editor directories and files
 .vscode/*

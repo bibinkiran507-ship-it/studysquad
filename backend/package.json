@@ -9,7 +9,7 @@
     "dev": "node --watch server.js",
     "prepare:db": "node scripts/prepare-db.js",
     "prisma:generate": "node scripts/prepare-db.js && prisma generate",
-    "prisma:push": "node scripts/prepare-db.js && prisma db push",
+    "prisma:push": "node scripts/prepare-db.js && prisma db push --accept-data-loss",
     "prisma:seed": "node prisma/seed.js",
     "build": "npm run prisma:generate"
   },
@@ -26,9 +26,8 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.4.0",
     "razorpay": "^2.9.8",
-    "socket.io": "^4.8.1"
-  },
-  "devDependencies": {
+    "socket.io": "^4.8.1",
     "prisma": "^6.4.1"
-  }
+  },
+  "devDependencies": {}
 }
