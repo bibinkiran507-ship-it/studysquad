@@ -227,7 +227,7 @@ io.on('connection', (socket) => {
   socket.emit('global_presence_update', summary);
 
   // Join a squad study room
-  socket.on('join_room', async ({ squadId, user }) => {
+  socket.on('join_room', async ({ squadId, user, squadName, subject }) => {
     if (!squadId) return;
     socket.join(squadId);
 
@@ -253,6 +253,33 @@ io.on('connection', (socket) => {
     });
 
     broadcastPresence(squadId);
+
+    // Global real-time notification broadcast to all other connected students on the platform
+    let resolvedSquadName = squadName;
+    let resolvedSubject = subject;
+    if (!resolvedSquadName) {
+      try {
+        const sq = await prisma.squad.findUnique({
+          where: { id: squadId },
+          select: { name: true, subject: true },
+        });
+        if (sq) {
+          resolvedSquadName = sq.name;
+          resolvedSubject = sq.subject;
+        }
+      } catch (_) {}
+    }
+
+    socket.broadcast.emit('global_user_started_study', {
+      id: `live-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      userId: cleanUser.id,
+      userName: cleanUser.name,
+      userAvatar: cleanUser.avatar,
+      squadId,
+      squadName: resolvedSquadName || 'Study Room',
+      subject: resolvedSubject || 'Active Study Session',
+      timestamp: new Date().toISOString(),
+    });
 
     // Send existing whiteboard drawing history to newly joined student
     if (squadWhiteboards.has(squadId)) {

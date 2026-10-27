@@ -20,6 +20,7 @@ import { useTypewriter } from './hooks/useTypewriter';
 import { squadsAPI, aiAPI, getSocketUrl } from './api/client';
 import { INITIAL_SQUADS } from './data/mockSquads';
 import { io } from 'socket.io-client';
+import LiveStudyToastContainer from './components/LiveStudyToast';
 
 // ⚠️ Replace this with your real Google OAuth Client ID from Google Cloud Console
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID_HERE';
@@ -35,6 +36,7 @@ function AppInner() {
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [aiPoweredBy, setAiPoweredBy] = useState('');
   const [globalPresence, setGlobalPresence] = useState({});
+  const [liveAlerts, setLiveAlerts] = useState([]);
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -42,7 +44,7 @@ function AppInner() {
   const [isProModalOpen, setIsProModalOpen] = useState(false);
   const [activeSquadRoom, setActiveSquadRoom] = useState(null);
 
-  // Subscribe to real-time global presence for active student counts
+  // Subscribe to real-time global presence and live study activity alerts
   useEffect(() => {
     squadsAPI
       .getLivePresence()
@@ -63,9 +65,56 @@ function AppInner() {
       setGlobalPresence(presenceSummary || {});
     });
 
+    socket.on('global_user_started_study', (alert) => {
+      // Don't show toast to the user who just joined themselves
+      if (user && alert.userId === user.id) return;
+
+      setLiveAlerts((prev) => {
+        if (
+          prev.some(
+            (a) =>
+              a.id === alert.id ||
+              (a.squadId === alert.squadId &&
+                Date.now() - new Date(a.timestamp).getTime() < 8000)
+          )
+        ) {
+          return prev;
+        }
+        return [...prev.slice(-2), alert];
+      });
+
+      // Browser Native Notification (if background tab & permitted)
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'granted' && document.hidden) {
+          try {
+            new Notification(`🟢 ${alert.userName} started studying live!`, {
+              body: `In "${alert.squadName}" (${alert.subject}). Click to join!`,
+            });
+          } catch (_) {}
+        }
+      }
+    });
+
     return () => {
       socket.disconnect();
     };
+  }, [user]);
+
+  // Request browser notification permission gently on first interaction
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      const requestPerm = () => {
+        try {
+          Notification.requestPermission();
+        } catch (_) {}
+      };
+      window.addEventListener('click', requestPerm, { once: true });
+      return () => window.removeEventListener('click', requestPerm);
+    }
   }, []);
 
   // Fetch squads from Backend API
@@ -301,6 +350,17 @@ function AppInner() {
     }
   };
 
+  const handleDismissAlert = useCallback((alertId) => {
+    setLiveAlerts((prev) => prev.filter((a) => a.id !== alertId));
+  }, []);
+
+  const handleJoinFromAlert = useCallback((squadId) => {
+    const target = squads.find((s) => s.id === squadId);
+    if (target) {
+      setActiveSquadRoom(target);
+    }
+  }, [squads]);
+
   return (
     <div className="relative text-neutral-900 font-sans selection:bg-[#EAECE9] selection:text-[#1C2E1E] antialiased overflow-x-hidden min-h-screen flex flex-col">
       {/* Animated Scroll Progress Bar */}
@@ -419,6 +479,13 @@ function AppInner() {
         globalPresence={globalPresence}
         onLeaveSquad={handleLeaveSquad}
         onOpenProModal={() => setIsProModalOpen(true)}
+      />
+
+      {/* Real-time Live Study Activity Toast Notifications */}
+      <LiveStudyToastContainer
+        notifications={liveAlerts}
+        onDismiss={handleDismissAlert}
+        onJoin={handleJoinFromAlert}
       />
     </div>
   );

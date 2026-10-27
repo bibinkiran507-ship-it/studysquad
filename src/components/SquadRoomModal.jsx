@@ -249,6 +249,25 @@ export default function SquadRoomModal({
     socketInstance.emit('join_room', {
       squadId: squad.id,
       user: user || { id: 'guest-' + Date.now(), name: 'Guest Explorer' },
+      squadName: squad.name,
+      subject: squad.subject,
+    });
+
+    // In-room notification when another classmate joins the session
+    socketInstance.on('user_joined', ({ user: joinedUser }) => {
+      if (joinedUser?.id && joinedUser.id !== user?.id) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            userId: 'system',
+            user: { name: 'StudySquad Presence' },
+            content: `👋 ${joinedUser.name} entered the study room!`,
+            createdAt: new Date().toISOString(),
+            isSystem: true,
+          },
+        ]);
+      }
     });
 
     socketInstance.on('receive_message', (msg) => {
