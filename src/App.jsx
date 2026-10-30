@@ -412,15 +412,15 @@ function AppInner() {
             id="spade-hero"
             className="w-full max-w-7xl mx-auto px-6 pt-20 sm:pt-24 lg:pt-28 pb-10 flex-1 flex flex-col justify-center"
           >
-            <div className="max-w-xl">
+            <div className="max-w-2xl">
               {/* Headline with Typewriter Hook & Blinking Cursor */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.6 }}
-                className="mb-5"
+                className="mb-6"
               >
-                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
+                <h1 className="text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
                   {displayed}
                   {!done && (
                     <span className="inline-block w-[3px] h-[0.85em] bg-black ml-1.5 align-middle animate-[blink_0.9s_step-start_infinite]" />

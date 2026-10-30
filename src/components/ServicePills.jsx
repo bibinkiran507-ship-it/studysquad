@@ -34,10 +34,10 @@ export default function ServicePills({
   return (
     <div className="w-full">
       {/* Prompt Title & Subtitle */}
-      <h2 className="text-base font-medium tracking-tight mb-1 text-black">
+      <h2 className="text-xl sm:text-2xl font-medium tracking-tight mb-1.5 text-black">
         What are you prepping for?
       </h2>
-      <p className="opacity-80 text-neutral-600 mb-3 text-xs">
+      <p className="opacity-80 text-neutral-600 mb-4 text-sm sm:text-base">
         Select all that apply to match with active student groups
       </p>
 
