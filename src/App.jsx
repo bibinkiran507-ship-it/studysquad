@@ -410,17 +410,17 @@ function AppInner() {
         <div className="relative z-10 flex flex-col flex-1 w-full bg-transparent pb-8 min-h-screen">
           <main
             id="spade-hero"
-            className="w-full max-w-7xl mx-auto px-6 pt-28 sm:pt-32 lg:pt-36 pb-16 flex-1 flex flex-col justify-center"
+            className="w-full max-w-7xl mx-auto px-6 pt-20 sm:pt-24 lg:pt-28 pb-10 flex-1 flex flex-col justify-center"
           >
-            <div className="max-w-2xl">
+            <div className="max-w-xl">
               {/* Headline with Typewriter Hook & Blinking Cursor */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.6 }}
-                className="mb-8"
+                className="mb-5"
               >
-                <h1 className="text-4xl sm:text-5xl lg:text-7xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
+                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
                   {displayed}
                   {!done && (
                     <span className="inline-block w-[3px] h-[0.85em] bg-black ml-1.5 align-middle animate-[blink_0.9s_step-start_infinite]" />
