@@ -63,6 +63,7 @@ app.use(
   helmet({
     contentSecurityPolicy: false, // Prevents breaking WebSockets, DiceBear avatars, and OAuth popups
     crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false, // CRITICAL: Allows Google OAuth popup window to communicate token back to parent
   })
 );
 

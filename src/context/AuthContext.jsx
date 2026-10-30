@@ -4,14 +4,32 @@ import { authAPI } from '../api/client';
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('studysquad_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [token, setToken] = useState(() => localStorage.getItem('studysquad_token'));
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register' | 'forgot'
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
-  // Load current user profile on startup if token exists
+  const saveUserSession = (newUser, newToken) => {
+    if (newToken) {
+      localStorage.setItem('studysquad_token', newToken);
+      setToken(newToken);
+    }
+    if (newUser) {
+      localStorage.setItem('studysquad_user', JSON.stringify(newUser));
+      setUser(newUser);
+    }
+  };
+
+  // Sync / verify user profile on startup if token exists
   useEffect(() => {
     const fetchUser = async () => {
       const storedToken = localStorage.getItem('studysquad_token');
@@ -21,12 +39,17 @@ export const AuthProvider = ({ children }) => {
       }
       try {
         const res = await authAPI.getMe();
-        setUser(res.data.user);
+        if (res.data?.user) {
+          saveUserSession(res.data.user);
+        }
       } catch (err) {
-        console.warn('Failed to load user profile, token might be expired.');
-        localStorage.removeItem('studysquad_token');
-        setToken(null);
-        setUser(null);
+        console.warn('Backend profile sync notice:', err.message);
+        if (err.response?.status === 401 && !storedToken.startsWith('mock-')) {
+          localStorage.removeItem('studysquad_token');
+          localStorage.removeItem('studysquad_user');
+          setToken(null);
+          setUser(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -37,9 +60,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     const res = await authAPI.login(email, password);
     const { token: newToken, user: newUser } = res.data;
-    localStorage.setItem('studysquad_token', newToken);
-    setToken(newToken);
-    setUser(newUser);
+    saveUserSession(newUser, newToken);
     setIsAuthModalOpen(false);
     return newUser;
   };
@@ -47,9 +68,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (name, email, password) => {
     const res = await authAPI.register(name, email, password);
     const { token: newToken, user: newUser } = res.data;
-    localStorage.setItem('studysquad_token', newToken);
-    setToken(newToken);
-    setUser(newUser);
+    saveUserSession(newUser, newToken);
     setIsAuthModalOpen(false);
     return newUser;
   };
@@ -58,9 +77,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await authAPI.googleLogin(googleUserData);
       const { token: newToken, user: newUser } = res.data;
-      localStorage.setItem('studysquad_token', newToken);
-      setToken(newToken);
-      setUser(newUser);
+      saveUserSession(newUser, newToken);
       setIsAuthModalOpen(false);
       return newUser;
     } catch (err) {
@@ -68,7 +85,7 @@ export const AuthProvider = ({ children }) => {
       const fallbackUser = {
         id: `google-${Date.now()}`,
         name: googleUserData.name || 'Google User',
-        email: googleUserData.email,
+        email: googleUserData.email || 'student@studysquad.com',
         avatar: googleUserData.avatar || `https://lh3.googleusercontent.com/a/default-user`,
         bio: '',
         pomodoroSessions: 0,
@@ -78,9 +95,7 @@ export const AuthProvider = ({ children }) => {
         provider: 'google',
       };
       const fallbackToken = `mock-google-jwt-${Date.now()}`;
-      localStorage.setItem('studysquad_token', fallbackToken);
-      setToken(fallbackToken);
-      setUser(fallbackUser);
+      saveUserSession(fallbackUser, fallbackToken);
       setIsAuthModalOpen(false);
       return fallbackUser;
     }
@@ -88,6 +103,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     localStorage.removeItem('studysquad_token');
+    localStorage.removeItem('studysquad_user');
     setToken(null);
     setUser(null);
   };

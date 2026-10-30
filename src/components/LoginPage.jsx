@@ -35,20 +35,36 @@ export default function LoginPage() {
       setGLoading(true);
       setError('');
       try {
-        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${tok.access_token}` },
-        });
-        const profile = await res.json();
+        let name = 'Google Student';
+        let email = '';
+        let avatar = '';
+        let googleId = '';
+
+        try {
+          const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: `Bearer ${tok.access_token}` },
+          });
+          if (res.ok) {
+            const profile = await res.json();
+            name = profile.name || name;
+            email = profile.email || email;
+            avatar = profile.picture || avatar;
+            googleId = profile.sub || googleId;
+          }
+        } catch (fetchErr) {
+          console.warn('Direct userinfo fetch failed, relying on backend verification:', fetchErr);
+        }
+
         await loginWithGoogle({
           accessToken: tok.access_token,
-          name: profile.name,
-          email: profile.email,
-          avatar: profile.picture,
-          googleId: profile.sub,
+          name,
+          email,
+          avatar,
+          googleId,
         });
       } catch (err) {
         console.error('Google profile fetch error:', err);
-        setError('Failed to get Google profile. Please try again.');
+        setError('Failed to sign in with Google. Please try again.');
       } finally {
         setGLoading(false);
       }
@@ -56,7 +72,7 @@ export default function LoginPage() {
     onError: (err) => {
       console.error('Google sign-in error:', err);
       if (err.error !== 'popup_closed_by_user') {
-        setError('Google sign-in failed. Please verify your client ID.');
+        setError('Google sign-in was closed or blocked. Please make sure pop-ups are allowed.');
       }
     },
   });
