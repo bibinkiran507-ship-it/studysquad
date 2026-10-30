@@ -23,7 +23,7 @@ import { io } from 'socket.io-client';
 import LiveStudyToastContainer from './components/LiveStudyToast';
 
 // ⚠️ Replace this with your real Google OAuth Client ID from Google Cloud Console
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID_HERE';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '235319617346-rh4dohmi84qnl1cabt0tqp39c3usdpr3.apps.googleusercontent.com';
 
 function AppInner() {
   const { displayed, done } = useTypewriter('find your\nstudy squad!', 38, 600);

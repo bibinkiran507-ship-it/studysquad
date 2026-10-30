@@ -191,7 +191,7 @@ export default function LoginPage() {
                 disabled={gLoading || loading}
                 onClick={() => {
                   setError('');
-                  const cid = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+                  const cid = import.meta.env.VITE_GOOGLE_CLIENT_ID || '235319617346-rh4dohmi84qnl1cabt0tqp39c3usdpr3.apps.googleusercontent.com';
                   if (!cid || cid.includes('YOUR_GOOGLE_CLIENT_ID') || !cid.trim()) {
                     setError('Google Sign-In is temporarily unavailable. Please sign in with your email & password below.');
                     return;
