@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import prisma from '../lib/prisma.js';
+import prisma, { withRetry } from '../lib/prisma.js';
 import { generateWithGemini } from './ai.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     if (type) where.type = type;
     if (userId) where.userId = userId;
 
-    const events = await prisma.studyEvent.findMany({
+    const events = await withRetry(() => prisma.studyEvent.findMany({
       where,
       include: {
         squad: {
@@ -38,7 +38,7 @@ router.get('/', async (req, res) => {
       orderBy: {
         date: 'asc',
       },
-    });
+    }));
 
     return res.json({ events });
   } catch (err) {

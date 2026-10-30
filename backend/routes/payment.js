@@ -213,4 +213,36 @@ router.get('/status', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/payment/dev-activate-pro - Developer test activation toggle
+router.post('/dev-activate-pro', requireAuth, async (req, res) => {
+  try {
+    const isCurrentlyPro = req.user.isPro;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        isPro: !isCurrentlyPro,
+        proPlan: !isCurrentlyPro ? 'monthly' : '',
+        proExpiresAt: !isCurrentlyPro ? expiresAt : null,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isPro: true,
+        proPlan: true,
+        proExpiresAt: true,
+      },
+    });
+
+    return res.json({ success: true, user: updatedUser, isPro: updatedUser.isPro });
+  } catch (err) {
+    console.error('Dev activate pro error:', err);
+    return res.status(500).json({ error: 'Failed to toggle Pro status.' });
+  }
+});
+
 export default router;

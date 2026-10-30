@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import prisma from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
+import { enforceAiLimit, getUsageStatus } from '../middleware/freemiumLimiter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,7 +58,7 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Resilient multi-model Gemini generator (falls back between active models)
+// Resilient multi-model Gemini generator (falls back between active models with auto-retry)
 export const generateWithGemini = async (contents, options = {}) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
@@ -65,27 +66,41 @@ export const generateWithGemini = async (contents, options = {}) => {
   }
   const candidateModels = [
     'gemini-flash-lite-latest',
-    'gemini-3.5-flash',
-    'gemini-flash-latest',
     'gemini-3.8-flash',
-    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+    'gemini-2.5-flash-lite',
+    'gemini-pro-latest',
+    'gemini-3.5-flash',
   ];
   const genAI = new GoogleGenerativeAI(apiKey.trim());
 
   for (const modelName of candidateModels) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName, ...options });
-      const result = await model.generateContent(contents);
-      const text = result?.response?.text ? result.response.text() : '';
-      if (text) {
-        return { text, modelName };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName, ...options });
+        const result = await model.generateContent(contents);
+        const text = result?.response?.text ? result.response.text() : '';
+        if (text) {
+          return { text, modelName };
+        }
+      } catch (err) {
+        // If Google server is experiencing a transient high-demand spike (503) or brief network jitter, pause 400ms and retry
+        if (attempt === 0 && (err.message.includes('503') || err.message.includes('fetch failed') || err.message.includes('ResourceExhausted'))) {
+          await new Promise((r) => setTimeout(r, 400));
+          continue;
+        }
+        break;
       }
-    } catch (err) {
-      console.warn(`Gemini [${modelName}] failed (${err.message}), trying backup model...`);
     }
   }
   return null;
 };
+
+// GET /api/ai/usage - Get current daily AI usage & limit status
+router.get('/usage', optionalAuth, (req, res) => {
+  const status = getUsageStatus(req.user, req.ip);
+  return res.json(status);
+});
 
 // POST /api/ai/match - Smart squad matcher
 router.post('/match', async (req, res) => {
@@ -418,7 +433,7 @@ No extra text or backticks.
 });
 
 // POST /api/ai/generate-flashcards - Generate active recall flashcards
-router.post('/generate-flashcards', requireAuth, async (req, res) => {
+router.post('/generate-flashcards', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const { subject = '', category = '', topic = '', notes = '' } = req.body;
     const model = getGeminiModel();
@@ -592,7 +607,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 });
 
 // POST /api/ai/generate-quiz - Generate active recall multiple-choice quiz
-router.post('/generate-quiz', requireAuth, async (req, res) => {
+router.post('/generate-quiz', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const { subject = '', category = '', topic = '', notes = '' } = req.body;
     const model = getGeminiModel();
@@ -795,7 +810,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 });
 
 // POST /api/ai/squad-bot - In-room AI Tutor & Assistant
-router.post('/squad-bot', optionalAuth, async (req, res) => {
+router.post('/squad-bot', optionalAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
       squadId,
@@ -940,7 +955,7 @@ Guidelines for your response:
 });
 
 // POST /api/ai/chat-doc - Chat with uploaded Lecture PDF, Slides, or Notes
-router.post('/chat-doc', requireAuth, async (req, res) => {
+router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
       squadId,
@@ -1063,7 +1078,7 @@ Provide a clear, detailed, and academically rigorous answer based on the concept
 });
 
 // POST /api/ai/viva-simulator - Interactive AI Viva / Oral Exam Simulator
-router.post('/viva-simulator', requireAuth, async (req, res) => {
+router.post('/viva-simulator', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
       subject = 'Computer Science',
@@ -1230,7 +1245,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
 });
 
 // POST /api/ai/generate-cheatsheet - 1-Page High-Yield Revision Matrix
-router.post('/generate-cheatsheet', requireAuth, async (req, res) => {
+router.post('/generate-cheatsheet', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const { subject = 'Computer Science', topic = 'Data Structures & Algorithms', notes = '' } = req.body;
 
@@ -1293,7 +1308,7 @@ Make it dense, rigorous, practical, and directly applicable for getting an A+ on
 });
 
 // POST /api/ai/feynman-explain - 3-Tier Concept Explainer
-router.post('/feynman-explain', requireAuth, async (req, res) => {
+router.post('/feynman-explain', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const { concept = '', subject = 'General Studies' } = req.body;
     if (!concept || !concept.trim()) {
@@ -1358,7 +1373,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
 });
 
 // POST /api/ai/code-audit - Code & Solution Diagnostic Auditor
-router.post('/code-audit', requireAuth, async (req, res) => {
+router.post('/code-audit', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const { code = '', language = 'javascript', problem = '' } = req.body;
     if (!code || !code.trim()) {

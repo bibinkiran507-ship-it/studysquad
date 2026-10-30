@@ -35,10 +35,13 @@ import {
   Calendar as CalendarIcon,
   Trash2,
   LogOut,
+  Share2,
+  UserPlus,
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
 import { aiAPI, squadsAPI, eventsAPI, getSocketUrl } from '../api/client';
+import LoFiFocusPlayer from './LoFiFocusPlayer';
 
 // Lazy-load heavy tab components to prevent blocking the main thread
 const Whiteboard   = lazy(() => import('./Whiteboard'));
@@ -110,6 +113,7 @@ export default function SquadRoomModal({
   const [isEditingMeeting, setIsEditingMeeting] = useState(false);
   const [meetingInput, setMeetingInput] = useState(squad?.meetingUrl || squad?.link || '');
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
   const [isSavingMeeting, setIsSavingMeeting] = useState(false);
 
   // Timetable & Exam State
@@ -545,6 +549,17 @@ export default function SquadRoomModal({
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
+  // Viral Share / Invite classmates directly to this squad
+  const handleInviteClassmates = () => {
+    const inviteUrl = `${window.location.origin}/?joinSquad=${squad.id}`;
+    const shareText = `🔥 Join my "${squad.name}" study squad on StudySquad! We're studying live with 24/7 AI tutor & focus beats:\n${inviteUrl}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareText);
+    }
+    setCopiedInvite(true);
+    setTimeout(() => setCopiedInvite(false), 2500);
+  };
+
   // Save new meeting link (host can update meeting url directly from room)
   const handleSaveMeetingUrl = async (e) => {
     e.preventDefault();
@@ -612,6 +627,17 @@ export default function SquadRoomModal({
                   <span className="hidden sm:inline">Leave Squad</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={handleInviteClassmates}
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                title="Copy WhatsApp/Discord invite link"
+              >
+                {copiedInvite ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <UserPlus className="w-3.5 h-3.5 text-emerald-400" />}
+                <span className="hidden sm:inline">{copiedInvite ? 'Invite Copied!' : 'Invite Classmates'}</span>
+                <span className="sm:hidden">{copiedInvite ? 'Copied!' : 'Invite'}</span>
+              </button>
 
               <button
                 type="button"
@@ -897,6 +923,9 @@ export default function SquadRoomModal({
                     </form>
                   )}
                 </div>
+
+                {/* In-Room Lo-Fi & Focus Ambient Beats Player */}
+                <LoFiFocusPlayer className="my-5" />
 
                 {/* Pomodoro Timer & Active Members */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

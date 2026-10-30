@@ -24,6 +24,24 @@ export default function UpgradeProModal({ isOpen, onClose }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
+  const handleDevTogglePro = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const res = await paymentAPI.devActivatePro();
+      if (res.data?.user) {
+        if (setUser) setUser(res.data.user);
+        if (refreshUser) await refreshUser();
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 2500);
+      }
+    } catch (err) {
+      setError('Failed to toggle test Pro mode.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   // Load Razorpay checkout script dynamically
@@ -227,6 +245,13 @@ export default function UpgradeProModal({ isOpen, onClose }) {
                   <p className="text-xs text-neutral-300">
                     Current Plan: <span className="font-semibold text-white capitalize">{user.proPlan || 'Annual'}</span> • All premium AI & priority rooms unlocked.
                   </p>
+                  <button
+                    type="button"
+                    onClick={handleDevTogglePro}
+                    className="mt-1.5 text-[11px] text-amber-300 hover:text-white underline cursor-pointer"
+                  >
+                    Switch to Free Plan (Test Daily 5-Query Limit)
+                  </button>
                 </div>
               </div>
               <span className="text-[11px] font-black text-neutral-950 bg-amber-400 px-3 py-1 rounded-full uppercase tracking-wider self-start sm:self-center shrink-0 shadow-xs">
@@ -237,8 +262,18 @@ export default function UpgradeProModal({ isOpen, onClose }) {
 
           {/* Error Alert Banner */}
           {error && (
-            <div className="p-3 mb-6 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-semibold text-center flex items-center justify-center gap-2">
+            <div className="p-3.5 mb-6 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-semibold text-center flex flex-col items-center justify-center gap-2">
               <span>⚠️ {error}</span>
+              {error.includes('Razorpay') && (
+                <button
+                  type="button"
+                  onClick={handleDevTogglePro}
+                  className="mt-1 px-4 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold transition-all cursor-pointer shadow-md inline-flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>⚡ Activate Instant Test Pro ({user?.isPro ? 'Switch to Free' : 'Switch to Pro'})</span>
+                </button>
+              )}
             </div>
           )}
 

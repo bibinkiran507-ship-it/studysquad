@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Brain,
@@ -357,6 +357,25 @@ export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onO
   const fileInputRef = useRef(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [chatCopiedId, setChatCopiedId] = useState(null);
+
+  // ─── Daily Usage Counter (Freemium Paywall) ───────────────────────────────
+  // Tracks how many free AI queries the user has used today (5/day for free tier)
+  const [dailyUsage, setDailyUsage] = useState(null);
+
+  const refreshUsage = async () => {
+    if (!user) return;
+    try {
+      const res = await aiAPI.getUsage();
+      setDailyUsage(res.data);
+    } catch {
+      // Silently ignore — counter is optional UI decoration
+    }
+  };
+
+  useEffect(() => {
+    refreshUsage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // Flashcards are generated on-demand when user clicks "Generate" — not auto-fired on mount
   // This avoids blocking the UI thread and allows the tab to open instantly.
@@ -1103,6 +1122,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       setTimeout(() => setStatusMessage(''), 8000);
     } finally {
       setIsGenerating(false);
+      refreshUsage(); // Refresh daily usage counter after each AI generation call
     }
   };
 
@@ -1939,6 +1959,50 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
         {statusMessage && (
           <p className="text-xs text-rose-400 font-medium">{statusMessage}</p>
+        )}
+
+        {/* ─── Daily Free Query Counter Badge ─── */}
+        {dailyUsage && !dailyUsage.isPro && (
+          <div className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-semibold ${
+            dailyUsage.remaining === 0
+              ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+              : dailyUsage.remaining <= 2
+              ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+              : 'bg-white/[0.03] border-white/10 text-neutral-400'
+          }`}>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-0.5">
+                {[...Array(5)].map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-2.5 h-2.5 rounded-full transition-all ${
+                      i < dailyUsage.used
+                        ? dailyUsage.remaining === 0 ? 'bg-rose-400' : 'bg-amber-400'
+                        : 'bg-white/15'
+                    }`}
+                  />
+                ))}
+              </div>
+              <span>
+                {dailyUsage.remaining === 0
+                  ? 'Daily limit reached — Upgrade for unlimited AI'
+                  : `${dailyUsage.used}/${dailyUsage.limit} free AI queries used today`}
+              </span>
+            </div>
+            {dailyUsage.remaining === 0 ? (
+              <button
+                type="button"
+                onClick={() => onOpenProModal?.()}
+                className="px-2.5 py-1 rounded-lg bg-amber-400 text-neutral-950 font-black text-[10px] cursor-pointer hover:bg-amber-300 transition-colors"
+              >
+                Upgrade
+              </button>
+            ) : (
+              <span className={`font-bold ${dailyUsage.remaining <= 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {dailyUsage.remaining} left
+              </span>
+            )}
+          </div>
         )}
       </div>
       )}

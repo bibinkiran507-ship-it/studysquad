@@ -179,7 +179,7 @@ export default function AuthModal() {
                 setError('');
                 const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
                 if (!clientId || clientId.includes('YOUR_GOOGLE_CLIENT_ID') || clientId.trim() === '') {
-                  setError('Google Client ID is not configured yet. Add your real VITE_GOOGLE_CLIENT_ID in .env, or use Email / Demo sign-in below.');
+                  setError('Google Sign-In is temporarily unavailable. Please sign in with your email & password below.');
                   return;
                 }
                 triggerGoogleLogin();

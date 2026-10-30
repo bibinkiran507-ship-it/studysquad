@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
-import prisma from '../lib/prisma.js';
+import prisma, { withRetry } from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 import { fileURLToPath } from 'url';
@@ -675,7 +675,7 @@ router.get('/:id/messages', optionalAuth, async (req, res) => {
     const { id } = req.params;
     const limit = parseInt(req.query.limit, 10) || 100;
 
-    const messages = await prisma.message.findMany({
+    const messages = await withRetry(() => prisma.message.findMany({
       where: { squadId: id },
       orderBy: { createdAt: 'asc' },
       take: limit,
@@ -684,7 +684,7 @@ router.get('/:id/messages', optionalAuth, async (req, res) => {
           select: { id: true, name: true, avatar: true }
         }
       }
-    });
+    }));
 
     return res.json({ messages });
   } catch (err) {

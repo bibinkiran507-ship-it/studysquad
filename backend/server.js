@@ -228,84 +228,92 @@ io.on('connection', (socket) => {
 
   // Join a squad study room
   socket.on('join_room', async ({ squadId, user, squadName, subject }) => {
-    if (!squadId) return;
-    socket.join(squadId);
+    try {
+      if (!squadId) return;
+      socket.join(squadId);
 
-    const cleanUser = {
-      id: user?.id || 'guest-' + socket.id,
-      name: user?.name || 'Guest Explorer',
-      avatar: user?.avatar || '',
-      joinedAt: new Date().toISOString(),
-    };
+      const cleanUser = {
+        id: user?.id || 'guest-' + socket.id,
+        name: user?.name || 'Guest Explorer',
+        avatar: user?.avatar || '',
+        joinedAt: new Date().toISOString(),
+      };
 
-    if (!activeSquadPresence.has(squadId)) {
-      activeSquadPresence.set(squadId, new Map());
-    }
-    activeSquadPresence.get(squadId).set(socket.id, cleanUser);
-    socketPresenceMap.set(socket.id, { squadId, user: cleanUser });
+      if (!activeSquadPresence.has(squadId)) {
+        activeSquadPresence.set(squadId, new Map());
+      }
+      activeSquadPresence.get(squadId).set(socket.id, cleanUser);
+      socketPresenceMap.set(socket.id, { squadId, user: cleanUser });
 
-    console.log(`Socket ${socket.id} (${cleanUser.name}) joined room: ${squadId}`);
+      console.log(`Socket ${socket.id} (${cleanUser.name}) joined room: ${squadId}`);
 
-    // Notify room members
-    socket.to(squadId).emit('user_joined', {
-      user: cleanUser,
-      message: `${cleanUser.name} has joined the study room!`,
-    });
+      // Notify room members
+      socket.to(squadId).emit('user_joined', {
+        user: cleanUser,
+        message: `${cleanUser.name} has joined the study room!`,
+      });
 
-    broadcastPresence(squadId);
+      broadcastPresence(squadId);
 
-    // Global real-time notification broadcast to all other connected students on the platform
-    let resolvedSquadName = squadName;
-    let resolvedSubject = subject;
-    if (!resolvedSquadName) {
-      try {
-        const sq = await prisma.squad.findUnique({
-          where: { id: squadId },
-          select: { name: true, subject: true },
-        });
-        if (sq) {
-          resolvedSquadName = sq.name;
-          resolvedSubject = sq.subject;
-        }
-      } catch (_) {}
-    }
+      // Global real-time notification broadcast to all other connected students on the platform
+      let resolvedSquadName = squadName;
+      let resolvedSubject = subject;
+      if (!resolvedSquadName) {
+        try {
+          const sq = await prisma.squad.findUnique({
+            where: { id: squadId },
+            select: { name: true, subject: true },
+          });
+          if (sq) {
+            resolvedSquadName = sq.name;
+            resolvedSubject = sq.subject;
+          }
+        } catch (_) {}
+      }
 
-    socket.broadcast.emit('global_user_started_study', {
-      id: `live-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      userId: cleanUser.id,
-      userName: cleanUser.name,
-      userAvatar: cleanUser.avatar,
-      squadId,
-      squadName: resolvedSquadName || 'Study Room',
-      subject: resolvedSubject || 'Active Study Session',
-      timestamp: new Date().toISOString(),
-    });
+      socket.broadcast.emit('global_user_started_study', {
+        id: `live-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        userId: cleanUser.id,
+        userName: cleanUser.name,
+        userAvatar: cleanUser.avatar,
+        squadId,
+        squadName: resolvedSquadName || 'Study Room',
+        subject: resolvedSubject || 'Active Study Session',
+        timestamp: new Date().toISOString(),
+      });
 
-    // Send existing whiteboard drawing history to newly joined student
-    if (squadWhiteboards.has(squadId)) {
-      socket.emit('whiteboard_init', squadWhiteboards.get(squadId));
+      // Send existing whiteboard drawing history to newly joined student
+      if (squadWhiteboards.has(squadId)) {
+        socket.emit('whiteboard_init', squadWhiteboards.get(squadId));
+      }
+    } catch (err) {
+      console.error('Error handling join_room:', err);
     }
   });
 
   // Leave squad room
   socket.on('leave_room', ({ squadId, user }) => {
-    if (!squadId) return;
-    socket.leave(squadId);
+    try {
+      if (!squadId) return;
+      socket.leave(squadId);
 
-    if (activeSquadPresence.has(squadId)) {
-      activeSquadPresence.get(squadId).delete(socket.id);
-      if (activeSquadPresence.get(squadId).size === 0) {
-        activeSquadPresence.delete(squadId);
+      if (activeSquadPresence.has(squadId)) {
+        activeSquadPresence.get(squadId).delete(socket.id);
+        if (activeSquadPresence.get(squadId).size === 0) {
+          activeSquadPresence.delete(squadId);
+        }
       }
+      socketPresenceMap.delete(socket.id);
+
+      socket.to(squadId).emit('user_left', {
+        user,
+        message: `${user?.name || 'A teammate'} left the room.`,
+      });
+
+      broadcastPresence(squadId);
+    } catch (err) {
+      console.error('Error handling leave_room:', err);
     }
-    socketPresenceMap.delete(socket.id);
-
-    socket.to(squadId).emit('user_left', {
-      user,
-      message: `${user?.name || 'A teammate'} left the room.`,
-    });
-
-    broadcastPresence(squadId);
   });
 
   // Real-time Chat message (strictly human-to-human peer chat)

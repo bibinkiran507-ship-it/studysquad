@@ -66,13 +66,22 @@ client.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Handle response errors gracefully
+// Handle response errors gracefully & trigger Pro upgrade when paywall hits
 client.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Clear token if expired or invalid
-      // localStorage.removeItem('studysquad_token');
+    if (
+      error.response?.status === 403 &&
+      (error.response?.data?.error === 'DAILY_AI_LIMIT_REACHED' ||
+        error.response?.data?.upgradeRequired)
+    ) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('studysquad:open-pro-modal', {
+            detail: error.response.data,
+          })
+        );
+      }
     }
     return Promise.reject(error);
   }
@@ -133,6 +142,7 @@ export const squadsAPI = {
 
 // AI Endpoints
 export const aiAPI = {
+  getUsage: () => client.get('/ai/usage'),
   matchSquads: (categories, query) =>
     client.post('/ai/match', { categories, query }),
   suggestGoals: (squadName, subject, category) =>
@@ -170,6 +180,7 @@ export const paymentAPI = {
   createOrder: (plan) => client.post('/payment/create-order', { plan }),
   verifyPayment: (data) => client.post('/payment/verify-payment', data),
   getStatus: () => client.get('/payment/status'),
+  devActivatePro: () => client.post('/payment/dev-activate-pro'),
 };
 
 // Helper to resolve relative file/upload URLs to the active backend origin

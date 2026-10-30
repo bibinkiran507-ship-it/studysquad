@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, LogOut, User as UserIcon, Calendar as CalendarIcon, Crown } from 'lucide-react';
+import { Plus, LogOut, User as UserIcon, Calendar as CalendarIcon, Crown, Flame } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { GoogleIcon } from './AuthModal';
 
@@ -53,6 +53,15 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
 
         {/* Desktop Actions (Right) */}
         <div className="hidden md:flex items-center gap-3">
+          {user && (
+            <div
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/15 border border-amber-500/30 text-amber-900 font-bold text-xs shadow-xs"
+              title="Daily Study Streak — Study daily to keep the flame alive!"
+            >
+              <Flame className="w-4 h-4 text-orange-500 fill-orange-500 animate-pulse" />
+              <span>{Math.max(1, user.pomodoroSessions || 1)}d Streak</span>
+            </div>
+          )}
           {user ? (
             <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md border border-neutral-300/40 rounded-full pl-2 pr-2 py-1 shadow-xs">
               {/* Avatar - clickable for profile */}
@@ -219,6 +228,10 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
                   )}
                 </div>
                 <span>Signed in as {user.name}</span>
+              </div>
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-900 font-bold text-xs mt-1">
+                <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500 animate-pulse" />
+                <span>{Math.max(1, user.pomodoroSessions || 1)} Day Study Streak</span>
               </div>
               <button
                 type="button"

@@ -44,6 +44,15 @@ function AppInner() {
   const [isProModalOpen, setIsProModalOpen] = useState(false);
   const [activeSquadRoom, setActiveSquadRoom] = useState(null);
 
+  // Automatically open Pro upgrade modal when paywall limit is hit
+  useEffect(() => {
+    const handleTriggerPro = () => {
+      setIsProModalOpen(true);
+    };
+    window.addEventListener('studysquad:open-pro-modal', handleTriggerPro);
+    return () => window.removeEventListener('studysquad:open-pro-modal', handleTriggerPro);
+  }, []);
+
   // Subscribe to real-time global presence and live study activity alerts
   useEffect(() => {
     squadsAPI
@@ -137,6 +146,19 @@ function AppInner() {
   useEffect(() => {
     loadSquads();
   }, [loadSquads, user]);
+
+  // Handle viral invite links (?joinSquad=xyz or ?squad=xyz)
+  useEffect(() => {
+    if (squads.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const targetSquadId = params.get('joinSquad') || params.get('squad');
+    if (targetSquadId) {
+      const found = squads.find((s) => s.id === targetSquadId);
+      if (found) {
+        setActiveSquadRoom(found);
+      }
+    }
+  }, [squads]);
 
   // When user clicks "Find Squads" in hero banner: AI Matchmaker
   const handleFindSquads = async () => {
