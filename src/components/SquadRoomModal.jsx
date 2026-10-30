@@ -581,37 +581,37 @@ export default function SquadRoomModal({
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/80 backdrop-blur-md">
         {/* Modal Card */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-neutral-900/90 text-white w-full max-w-6xl rounded-3xl shadow-2xl border border-white/15 overflow-hidden flex flex-col max-h-[92vh] backdrop-blur-2xl"
+          className="bg-neutral-900/95 text-white w-full max-w-6xl h-full sm:h-auto sm:max-h-[92vh] rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-white/15 overflow-hidden flex flex-col backdrop-blur-2xl"
         >
           {/* Header */}
-          <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/5">
-            <div className="flex items-center gap-3">
+          <div className="px-3 sm:px-6 py-2.5 sm:py-4 border-b border-white/10 flex items-center justify-between bg-white/5 gap-2 shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
               </span>
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <span className="text-[10px] sm:text-xs font-bold text-emerald-400 uppercase tracking-wider shrink-0">
                     Live Study Squad Room
                   </span>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 border border-white/10">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 border border-white/10 shrink-0 truncate max-w-[120px]">
                     {squad.category}
                   </span>
                 </div>
-                <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight mt-0.5">
+                <h3 className="text-sm sm:text-lg lg:text-xl font-bold text-white tracking-tight mt-0.5 line-clamp-2 leading-tight">
                   {squad.name}
                 </h3>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               {onLeaveSquad && (
                 <button
                   type="button"
@@ -652,7 +652,7 @@ export default function SquadRoomModal({
           {/* Navigation Tabs */}
           <div
             ref={tabListRef}
-            className="flex items-center px-3 sm:px-6 border-b border-white/10 bg-black/25 gap-1 sm:gap-1.5 lg:gap-2.5 overflow-x-auto no-scrollbar scroll-smooth"
+            className="flex items-center px-2 sm:px-6 border-b border-white/10 bg-black/25 gap-1 sm:gap-1.5 lg:gap-2.5 overflow-x-auto no-scrollbar scroll-smooth flex-nowrap shrink-0"
           >
             <button
               type="button"

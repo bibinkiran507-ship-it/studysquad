@@ -1714,7 +1714,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   return (
     <div className="space-y-4">
       {/* ─── Sleek Status Ribbon ─── */}
-      <div className="px-3.5 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300">
+      <div className="px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300 gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
           <span className="font-bold">
@@ -1736,8 +1736,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h4 className="text-sm sm:text-base font-bold text-white tracking-tight truncate">
-                  AI Academic Studio & Power Suite
+                <h4 className="text-sm sm:text-base font-bold text-white tracking-tight">
+                  <span className="sm:hidden">AI Academic Suite</span>
+                  <span className="hidden sm:inline">AI Academic Studio & Power Suite</span>
                 </h4>
                 {poweredBy && (
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">
@@ -1751,21 +1752,22 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             </div>
           </div>
 
-          <span className="text-[11px] font-semibold text-neutral-400 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 shrink-0 flex items-center gap-1.5">
+          <span className="text-[10px] sm:text-[11px] font-semibold text-neutral-400 px-2 sm:px-2.5 py-1 rounded-full bg-white/5 border border-white/10 shrink-0 flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>7 AI Engines Ready</span>
+            <span className="hidden sm:inline">7 AI Engines Ready</span>
+            <span className="sm:hidden">7 Engines</span>
           </span>
         </div>
 
         {/* 7 Responsive Mode Grid Buttons */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="flex overflow-x-auto no-scrollbar scroll-smooth gap-2 pb-1 sm:grid sm:grid-cols-4 lg:grid-cols-7">
           <button
             type="button"
             onClick={() => {
               setMode('flashcards');
               if (flashcards.length === 0) handleGenerate('flashcards');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'flashcards'
                 ? 'bg-emerald-500 text-neutral-950 border-emerald-400 shadow-md shadow-emerald-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1781,7 +1783,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
               setMode('quiz');
               if (quizQuestions.length === 0) handleGenerate('quiz');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'quiz'
                 ? 'bg-violet-500 text-white border-violet-400 shadow-md shadow-violet-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1796,7 +1798,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             onClick={() => {
               setMode('chat');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'chat'
                 ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white border-blue-400 shadow-md shadow-blue-500/25'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1812,7 +1814,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             onClick={() => {
               setMode('viva');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'viva'
                 ? 'bg-rose-500 text-white border-rose-400 shadow-md shadow-rose-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1828,7 +1830,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             onClick={() => {
               setMode('cheatsheet');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'cheatsheet'
                 ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md shadow-amber-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1844,7 +1846,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             onClick={() => {
               setMode('feynman');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'feynman'
                 ? 'bg-cyan-500 text-neutral-950 border-cyan-400 shadow-md shadow-cyan-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1860,7 +1862,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             onClick={() => {
               setMode('audit');
             }}
-            className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'audit'
                 ? 'bg-teal-500 text-neutral-950 border-teal-400 shadow-md shadow-teal-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
