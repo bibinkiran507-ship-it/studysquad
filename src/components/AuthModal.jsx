@@ -177,7 +177,7 @@ export default function AuthModal() {
               disabled={googleLoading || loading}
               onClick={() => {
                 setError('');
-                const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '235319617346-rh4dohmi84qnl1cabt0tqp39c3usdpr3.apps.googleusercontent.com';
+                const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '569756310563-91mpouatvn8ktualrlfdhh0fjaju9v7m.apps.googleusercontent.com';
                 if (!clientId || clientId.includes('YOUR_GOOGLE_CLIENT_ID') || clientId.trim() === '') {
                   setError('Google Sign-In is temporarily unavailable. Please sign in with your email & password below.');
                   return;
