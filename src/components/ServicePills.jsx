@@ -34,15 +34,15 @@ export default function ServicePills({
   return (
     <div className="w-full">
       {/* Prompt Title & Subtitle */}
-      <h2 className="text-2xl font-medium tracking-tight mb-2 text-black">
+      <h2 className="text-base font-medium tracking-tight mb-1 text-black">
         What are you prepping for?
       </h2>
-      <p className="opacity-80 text-neutral-600 mb-6 text-base">
+      <p className="opacity-80 text-neutral-600 mb-3 text-xs">
         Select all that apply to match with active student groups
       </p>
 
       {/* Multi-Select Pills Container (Purely Transparent Options) */}
-      <div className="flex flex-wrap gap-2.5 sm:gap-3">
+      <div className="flex flex-wrap gap-1.5">
         {PREP_OPTIONS.map((option) => {
           const isSelected = selectedOptions.includes(option)
           return (
@@ -51,7 +51,7 @@ export default function ServicePills({
               type="button"
               onClick={() => toggleOption(option)}
               whileTap={{ scale: 0.97 }}
-              className={`px-5 py-2.5 sm:px-6 sm:py-3 rounded-full text-sm sm:text-base font-medium cursor-pointer inline-flex items-center transition-all duration-200 select-none ${
+              className={`px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer inline-flex items-center transition-all duration-200 select-none ${
                 isSelected
                   ? 'bg-[#1C2E1E] text-white border border-[#1C2E1E] shadow-sm transform scale-[1.02]'
                   : 'bg-transparent text-black border border-neutral-400 hover:border-black hover:bg-black/5'
@@ -64,9 +64,9 @@ export default function ServicePills({
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.5, y: -4 }}
                     transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                    className="inline-flex items-center mr-2"
+                    className="inline-flex items-center mr-1.5"
                   >
-                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    <Check className="w-3 h-3 stroke-[2.5]" />
                   </motion.span>
                 )}
               </AnimatePresence>
@@ -77,7 +77,7 @@ export default function ServicePills({
       </div>
 
       {/* Contingent Feedback Status Banner (Purely Transparent with border) */}
-      <div className="mt-7 min-h-[52px]">
+      <div className="mt-4 min-h-[44px]">
         <AnimatePresence mode="wait">
           {selectedOptions.length === 0 ? (
             <motion.p
@@ -99,8 +99,8 @@ export default function ServicePills({
               transition={{ type: 'spring', stiffness: 300, damping: 25 }}
               className="overflow-hidden"
             >
-              <div className="bg-transparent border border-neutral-300 rounded-2xl px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 max-w-xl">
-                <span className="text-sm sm:text-base text-black">
+              <div className="bg-transparent border border-neutral-300 rounded-xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 max-w-xl">
+                <span className="text-xs text-black">
                   Ready to match for:{' '}
                   <strong className="font-semibold text-black">
                     {selectedOptions.join(', ')}
@@ -109,7 +109,7 @@ export default function ServicePills({
                 <button
                   type="button"
                   onClick={onFindSquads}
-                  className="bg-[#1C2E1E] hover:bg-[#2B432F] text-white px-4 py-2 rounded-xl text-xs font-semibold tracking-wider inline-flex items-center gap-1.5 transition-all self-start sm:self-center cursor-pointer group shadow-xs hover:shadow-sm active:scale-97"
+                  className="bg-[#1C2E1E] hover:bg-[#2B432F] text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold tracking-wider inline-flex items-center gap-1.5 transition-all self-start sm:self-center cursor-pointer group shadow-xs hover:shadow-sm active:scale-97"
                 >
                   <span>Find Squads</span>
                   <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
