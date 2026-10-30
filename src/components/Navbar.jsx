@@ -23,19 +23,19 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
 
   return (
     <>
-      <header className="fixed top-0 inset-x-0 z-30 px-5 sm:px-8 py-3.5 sm:py-4 flex flex-row justify-between items-center bg-transparent transition-all">
+      <header className="fixed top-0 inset-x-0 z-30 px-4 sm:px-6 py-2 sm:py-2.5 flex flex-row justify-between items-center bg-transparent transition-all">
         {/* Logo (Left side) */}
-        <a href="#" className="flex flex-row items-center gap-2.5 group">
-          <span className="text-[20px] sm:text-[24px] tracking-tight text-black font-semibold select-none group-hover:opacity-80 transition-opacity">
+        <a href="#" className="flex flex-row items-center gap-2 group">
+          <span className="text-[16px] sm:text-[18px] tracking-tight text-black font-semibold select-none group-hover:opacity-80 transition-opacity">
             StudySquad&reg;
           </span>
-          <span className="text-[22px] sm:text-[26px] text-emerald-800 select-none tracking-[-0.02em] font-medium leading-none mb-0.5">
+          <span className="text-[18px] sm:text-[20px] text-emerald-800 select-none tracking-[-0.02em] font-medium leading-none mb-0.5">
             &#10033;
           </span>
         </a>
 
         {/* Desktop Nav Links (Center) */}
-        <nav className="hidden md:flex flex-row items-center text-[17px] text-neutral-800 font-medium">
+        <nav className="hidden md:flex flex-row items-center text-[13px] text-neutral-800 font-medium">
           {navLinks.map((link, index) => (
             <span key={link.name} className="flex items-center">
               <a
@@ -45,25 +45,25 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
                 {link.name}
               </a>
               {index < navLinks.length - 1 && (
-                <span className="opacity-30 mx-2 text-sm">/</span>
+                <span className="opacity-30 mx-1 text-xs">/</span>
               )}
             </span>
           ))}
         </nav>
 
         {/* Desktop Actions (Right) */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-2">
           {user && (
             <div
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/15 border border-amber-500/30 text-amber-900 font-bold text-xs shadow-xs"
+              className="flex items-center gap-1 px-2 py-1 rounded-full bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/15 border border-amber-500/30 text-amber-900 font-bold text-[11px] shadow-xs"
               title="Daily Study Streak — Study daily to keep the flame alive!"
             >
-              <Flame className="w-4 h-4 text-orange-500 fill-orange-500 animate-pulse" />
+              <Flame className="w-3 h-3 text-orange-500 fill-orange-500 animate-pulse" />
               <span>{Math.max(1, user.pomodoroSessions || 1)}d Streak</span>
             </div>
           )}
           {user ? (
-            <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md border border-neutral-300/40 rounded-full pl-2 pr-2 py-1 shadow-xs">
+            <div className="flex items-center gap-1.5 bg-white/40 backdrop-blur-md border border-neutral-300/40 rounded-full pl-1.5 pr-1.5 py-0.5 shadow-xs">
               {/* Avatar - clickable for profile */}
               <button
                 type="button"
@@ -75,23 +75,23 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
                   src={user.avatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`}
                   alt={user.name}
                   referrerPolicy="no-referrer"
-                  className="w-7 h-7 rounded-full object-cover border border-emerald-600/40 group-hover:border-emerald-500 transition-colors"
+                  className="w-6 h-6 rounded-full object-cover border border-emerald-600/40 group-hover:border-emerald-500 transition-colors"
                 />
                 {(user.provider === 'google' || user.email?.includes('@gmail.com')) && (
                   <span
                     title="Verified Google Account"
-                    className="absolute -bottom-1 -right-1 bg-white rounded-full p-0.5 shadow-xs border border-neutral-200 flex items-center justify-center"
+                    className="absolute -bottom-0.5 -right-0.5 bg-white rounded-full p-px shadow-xs border border-neutral-200 flex items-center justify-center"
                   >
-                    <GoogleIcon className="w-2.5 h-2.5" />
+                    <GoogleIcon className="w-2 h-2" />
                   </span>
                 )}
               </button>
 
-              {/* Name + profile button */}
+              {/* Name */}
               <button
                 type="button"
                 onClick={openProfile}
-                className="text-xs font-semibold text-neutral-800 max-w-[90px] truncate hover:text-emerald-700 transition-colors cursor-pointer"
+                className="text-[11px] font-semibold text-neutral-800 max-w-[70px] truncate hover:text-emerald-700 transition-colors cursor-pointer"
                 title="View your profile"
               >
                 {user.name}
@@ -102,65 +102,62 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
                 type="button"
                 onClick={openProfile}
                 title="My Profile"
-                className="text-neutral-500 hover:text-emerald-700 transition-colors p-1 rounded-full hover:bg-neutral-200/50 cursor-pointer"
+                className="text-neutral-500 hover:text-emerald-700 transition-colors p-0.5 rounded-full hover:bg-neutral-200/50 cursor-pointer"
               >
-                <UserIcon size={13} />
+                <UserIcon size={11} />
               </button>
 
               {/* Divider */}
-              <span className="w-px h-4 bg-neutral-300/50" />
+              <span className="w-px h-3 bg-neutral-300/50" />
 
               {/* Sign out */}
               <button
                 type="button"
                 onClick={logout}
                 title="Sign Out"
-                className="text-neutral-500 hover:text-rose-600 transition-colors p-1 rounded-full hover:bg-neutral-200/50 cursor-pointer"
+                className="text-neutral-500 hover:text-rose-600 transition-colors p-0.5 rounded-full hover:bg-neutral-200/50 cursor-pointer"
               >
-                <LogOut size={13} />
+                <LogOut size={11} />
               </button>
             </div>
           ) : (
             <button
               type="button"
               onClick={() => openAuthModal('login')}
-              className="text-sm font-semibold text-neutral-800 hover:text-black px-3.5 py-2 rounded-full hover:bg-white/40 transition-all cursor-pointer"
+              className="text-xs font-semibold text-neutral-800 hover:text-black px-3 py-1.5 rounded-full hover:bg-white/40 transition-all cursor-pointer"
             >
               Sign In
             </button>
           )}
 
-
-
           {/* Calendar & Exam Countdown Trigger */}
           <button
             type="button"
             onClick={onOpenCalendarModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/50 hover:bg-white/80 border border-neutral-300/60 text-xs sm:text-sm font-semibold text-neutral-800 shadow-xs transition-all hover:border-emerald-600/50 cursor-pointer"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-white/50 hover:bg-white/80 border border-neutral-300/60 text-[11px] font-semibold text-neutral-800 shadow-xs transition-all hover:border-emerald-600/50 cursor-pointer"
             title="Study Session Calendar & Exam Countdown"
           >
-            <CalendarIcon className="w-4 h-4 text-emerald-700" />
+            <CalendarIcon className="w-3 h-3 text-emerald-700" />
             <span>Calendar & Exams</span>
           </button>
 
-
-          {/* StudySquad Pro Commercial SaaS Trigger */}
+          {/* StudySquad Pro Trigger */}
           <button
             type="button"
             onClick={onOpenProModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-400/25 via-amber-300/35 to-yellow-400/25 hover:from-amber-400/40 hover:to-yellow-400/40 border border-amber-500/40 text-xs sm:text-sm font-bold text-amber-950 shadow-xs transition-all hover:scale-103 cursor-pointer"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-gradient-to-r from-amber-400/25 via-amber-300/35 to-yellow-400/25 hover:from-amber-400/40 hover:to-yellow-400/40 border border-amber-500/40 text-[11px] font-bold text-amber-950 shadow-xs transition-all hover:scale-103 cursor-pointer"
             title="StudySquad Pro - Unlock Unlimited AI, Oral Viva Examiner & Formulas"
           >
-            <Crown className="w-4 h-4 text-amber-600 fill-amber-400" />
+            <Crown className="w-3 h-3 text-amber-600 fill-amber-400" />
             <span>{user?.isPro ? 'Pro Member' : 'Upgrade to Pro'}</span>
           </button>
 
           <button
             type="button"
             onClick={handleCreateClick}
-            className="inline-flex items-center gap-1.5 bg-[#1C2E1E] hover:bg-[#2A442D] text-white px-4 py-2 rounded-full text-sm font-medium transition-all shadow-xs hover:shadow-md active:scale-97 cursor-pointer"
+            className="inline-flex items-center gap-1 bg-[#1C2E1E] hover:bg-[#2A442D] text-white px-3 py-1.5 rounded-full text-xs font-medium transition-all shadow-xs hover:shadow-md active:scale-97 cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3 h-3" />
             Create Squad
           </button>
         </div>
@@ -278,7 +275,6 @@ export default function Navbar({ onOpenCreateModal, onOpenCalendarModal, onOpenP
             <CalendarIcon className="w-4 h-4 text-emerald-700" />
             Calendar & Exams
           </button>
-
 
           {/* Mobile Upgrade Pro Trigger */}
           <button
