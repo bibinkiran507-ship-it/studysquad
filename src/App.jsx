@@ -514,7 +514,7 @@ function AppInner() {
 }
 
 function AppRoot() {
-  const { loading } = useAuth();
+  const { user, loading } = useAuth();
 
   // While checking auth state, show a minimal dark loader
   if (loading) {
@@ -525,7 +525,12 @@ function AppRoot() {
     );
   }
 
-  // Everyone sees the full landing page by default; visitors can browse and sign in via the glass modal
+  // Not logged in → show full-page login first
+  if (!user) {
+    return <LoginPage />;
+  }
+
+  // Logged in → show the home page
   return <AppInner />;
 }
 
