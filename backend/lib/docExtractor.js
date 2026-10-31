@@ -153,3 +153,4 @@ export function extractDocumentText(filePath, explicitExt = '') {
     return '';
   }
 }
+

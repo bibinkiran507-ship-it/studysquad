@@ -207,6 +207,12 @@ router.post('/google', async (req, res) => {
     const { accessToken, credential } = req.body || {};
     const expectedClientId = process.env.GOOGLE_CLIENT_ID;
 
+    const allowedClientIds = [
+      expectedClientId,
+      '569756310563-91mpouatvn8ktuarlrfdhh0fjaju9v7m.apps.googleusercontent.com',
+      '235319617346-rh4dohmi84qnl1cabt0tqp39c3usdpr3.apps.googleusercontent.com',
+    ].filter(Boolean);
+
     let verifiedEmail = null;
     let verifiedName = null;
     let verifiedAvatar = null;
@@ -216,7 +222,7 @@ router.post('/google', async (req, res) => {
       try {
         const ticket = await getGoogleClient().verifyIdToken({
           idToken: credential,
-          audience: expectedClientId,
+          audience: allowedClientIds,
         });
         const payload = ticket.getPayload();
         if (payload?.email_verified === false) {
@@ -248,11 +254,22 @@ router.post('/google', async (req, res) => {
         const [tokenInfo, profile] = await Promise.all([tokenInfoRes.json(), gRes.json()]);
 
         // Verify token was minted specifically for our Google OAuth Client ID
-        if (
-          expectedClientId &&
-          tokenInfo.aud !== expectedClientId &&
-          tokenInfo.azp !== expectedClientId
-        ) {
+        const tokenAud = tokenInfo.aud || tokenInfo.azp || tokenInfo.issued_to;
+        const isAudValid = allowedClientIds.some(
+          (id) =>
+            id === tokenInfo.aud ||
+            id === tokenInfo.azp ||
+            id === tokenInfo.issued_to ||
+            (tokenAud && String(tokenAud) === id)
+        );
+
+        if (allowedClientIds.length > 0 && !isAudValid) {
+          console.warn('Google token audience check:', {
+            aud: tokenInfo.aud,
+            azp: tokenInfo.azp,
+            issued_to: tokenInfo.issued_to,
+            expected: allowedClientIds,
+          });
           return res.status(401).json({ error: 'Google token audience mismatch.' });
         }
 

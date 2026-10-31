@@ -480,19 +480,35 @@ export default function AuthModal() {
             <p className="text-[11px] text-neutral-600 mb-1">
               5 free AI study credits every day • Upgrade anytime for Unlimited Pro
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMode(authMode === 'register' ? 'login' : 'register');
-                setError('');
-                setInfoMessage('');
-              }}
-              className="text-[12px] text-[#1C2E1E] font-semibold hover:underline transition-colors cursor-pointer"
-            >
-              {authMode === 'register'
-                ? 'Already have an account? Sign In →'
-                : 'Create your free account → Join the community'}
-            </button>
+            <div className="flex flex-col items-center gap-1.5 mt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode(authMode === 'register' ? 'login' : 'register');
+                  setError('');
+                  setInfoMessage('');
+                }}
+                className="text-[12px] text-[#1C2E1E] font-semibold hover:underline transition-colors cursor-pointer"
+              >
+                {authMode === 'register'
+                  ? 'Already have an account? Sign In →'
+                  : 'Create your free account → Join the community'}
+              </button>
+              <a
+                href="/login"
+                onClick={(e) => {
+                  e.preventDefault();
+                  closeAuthModal();
+                  if (typeof window !== 'undefined') {
+                    window.history.pushState({}, '', '/login');
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                  }
+                }}
+                className="text-[11px] text-neutral-500 hover:text-black underline cursor-pointer"
+              >
+                Prefer full-screen login page? Click here →
+              </a>
+            </div>
           </div>
         </motion.div>
       </div>

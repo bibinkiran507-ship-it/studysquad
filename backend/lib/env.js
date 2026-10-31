@@ -8,3 +8,4 @@ const __dirname = path.dirname(__filename);
 // Load backend/.env first, then root .env fallback BEFORE any route/client module initializes
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 dotenv.config();
+
