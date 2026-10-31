@@ -580,23 +580,8 @@ function AppInner() {
 
 function AppRoot() {
   const { user, loading } = useAuth();
-  const [showFullLogin, setShowFullLogin] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    const p = window.location.pathname.toLowerCase();
-    const hasResetToken = new URLSearchParams(window.location.search).has('resetToken');
-    return p === '/login' || hasResetToken;
-  });
 
-  useEffect(() => {
-    const syncRoute = () => {
-      const p = window.location.pathname.toLowerCase();
-      const hasResetToken = new URLSearchParams(window.location.search).has('resetToken');
-      setShowFullLogin(p === '/login' || hasResetToken);
-    };
-    window.addEventListener('popstate', syncRoute);
-    return () => window.removeEventListener('popstate', syncRoute);
-  }, []);
-
+  // While checking auth state, show a clean minimal spinner
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#e9ebe6]">
@@ -605,8 +590,8 @@ function AppRoot() {
     );
   }
 
-  // Dedicated /login or ?resetToken= view when signed out; otherwise render the live StudySquad homepage for guests, Googlebot & viral invitees!
-  if (!user && showFullLogin) {
+  // Not signed in -> always show the full-screen Login Page first on https://studysquadai.com
+  if (!user) {
     return (
       <Suspense
         fallback={
@@ -620,6 +605,7 @@ function AppRoot() {
     );
   }
 
+  // Signed in -> immediately enter the live landing page and squads!
   return <AppInner />;
 }
 

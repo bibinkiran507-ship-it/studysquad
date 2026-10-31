@@ -184,12 +184,6 @@ export default function LoginPage() {
         </a>
 
         <div className="flex items-center gap-2">
-          <a
-            href="/"
-            className="text-xs sm:text-sm font-medium text-neutral-700 hover:text-black px-3 py-1.5 rounded-full bg-white/40 hover:bg-white/60 backdrop-blur-md border border-white/60 transition-all"
-          >
-            Explore Squads
-          </a>
           <button
             type="button"
             onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
