@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import prisma from '../lib/prisma.js';
-import { requireAuth, getJwtSecret } from '../middleware/auth.js';
+import { requireAuth, getJwtSecret, resolveActivePro } from '../middleware/auth.js';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -111,8 +111,8 @@ router.post('/login', async (req, res) => {
         bio: user.bio,
         pomodoroSessions: user.pomodoroSessions,
         isEmailVerified: user.isEmailVerified,
-        isPro: Boolean(user.isPro),
-        proPlan: user.proPlan || 'free',
+        isPro: resolveActivePro(user),
+        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
         proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt
       }
@@ -211,8 +211,8 @@ router.post('/google', async (req, res) => {
         bio: user.bio || '',
         pomodoroSessions: user.pomodoroSessions || 0,
         isEmailVerified: user.isEmailVerified,
-        isPro: Boolean(user.isPro),
-        proPlan: user.proPlan || 'free',
+        isPro: resolveActivePro(user),
+        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
         proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt,
         provider: 'google',
@@ -253,6 +253,8 @@ router.get('/me', requireAuth, async (req, res) => {
     return res.json({
       user: {
         ...user,
+        isPro: resolveActivePro(user),
+        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
         squadsJoined: user._count.memberships + user._count.ownedSquads,
       }
     });
@@ -281,11 +283,19 @@ router.patch('/me', requireAuth, async (req, res) => {
         bio: true,
         pomodoroSessions: true,
         isEmailVerified: true,
+        isPro: true,
+        proPlan: true,
+        proExpiresAt: true,
         createdAt: true
       }
     });
 
-    return res.json({ user: updated });
+    return res.json({
+      user: {
+        ...updated,
+        isPro: resolveActivePro(updated),
+      },
+    });
   } catch (error) {
     console.error('Profile update error:', error);
     return res.status(500).json({ error: 'Failed to update profile.' });

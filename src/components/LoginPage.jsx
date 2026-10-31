@@ -8,6 +8,7 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../context/AuthContext';
 import { GoogleIcon } from './AuthModal';
 import BackgroundVideo from './BackgroundVideo';
+import { openLegalPolicy } from './LegalPolicyModal';
 
 export default function LoginPage() {
   const { login, register, loginWithGoogle } = useAuth();
@@ -486,13 +487,21 @@ export default function LoginPage() {
             >
               <p className="text-[11px] text-neutral-500">
                 By continuing, you agree to our{' '}
-                <span className="text-neutral-800 font-medium cursor-pointer hover:underline">
+                <button
+                  type="button"
+                  onClick={() => openLegalPolicy('terms')}
+                  className="text-neutral-800 font-medium cursor-pointer hover:underline"
+                >
                   Terms
-                </span>
+                </button>
                 {' & '}
-                <span className="text-neutral-800 font-medium cursor-pointer hover:underline">
+                <button
+                  type="button"
+                  onClick={() => openLegalPolicy('privacy')}
+                  className="text-neutral-800 font-medium cursor-pointer hover:underline"
+                >
                   Privacy Policy
-                </span>
+                </button>
               </p>
             </div>
           </div>
@@ -527,9 +536,42 @@ export default function LoginPage() {
       </main>
 
       {/* ── Minimal Bottom Footer ── */}
-      <footer className="relative z-20 w-full px-6 py-4 text-center">
-        <p className="text-xs text-neutral-400 select-none">
-          &copy; {new Date().getFullYear()} StudySquad &middot; Focused peer study rooms &amp; accountability.
+      <footer className="relative z-20 w-full px-6 py-3.5 text-center space-y-1">
+        <div className="flex items-center justify-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-neutral-500">
+          <button
+            type="button"
+            onClick={() => openLegalPolicy('terms')}
+            className="hover:text-neutral-800 transition-colors cursor-pointer"
+          >
+            Terms &amp; Conditions
+          </button>
+          <span className="opacity-40">&bull;</span>
+          <button
+            type="button"
+            onClick={() => openLegalPolicy('privacy')}
+            className="hover:text-neutral-800 transition-colors cursor-pointer"
+          >
+            Privacy Policy
+          </button>
+          <span className="opacity-40">&bull;</span>
+          <button
+            type="button"
+            onClick={() => openLegalPolicy('refund')}
+            className="hover:text-neutral-800 transition-colors cursor-pointer"
+          >
+            Refund &amp; Cancellation
+          </button>
+          <span className="opacity-40">&bull;</span>
+          <button
+            type="button"
+            onClick={() => openLegalPolicy('contact')}
+            className="hover:text-neutral-800 transition-colors cursor-pointer"
+          >
+            Contact Us
+          </button>
+        </div>
+        <p className="text-[11px] text-neutral-400 select-none">
+          &copy; {new Date().getFullYear()} StudySquad&reg; &middot; Focused peer study rooms &amp; accountability.
         </p>
       </footer>
     </div>

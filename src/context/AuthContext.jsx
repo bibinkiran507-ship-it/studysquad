@@ -44,7 +44,10 @@ export const AuthProvider = ({ children }) => {
         }
       } catch (err) {
         console.warn('Backend profile sync notice:', err.message);
-        if (err.response?.status === 401 && !storedToken.startsWith('mock-')) {
+        if (
+          err.response?.status === 401 &&
+          (!import.meta.env.DEV || !storedToken.startsWith('mock-'))
+        ) {
           localStorage.removeItem('studysquad_token');
           localStorage.removeItem('studysquad_user');
           setToken(null);
@@ -81,7 +84,10 @@ export const AuthProvider = ({ children }) => {
       setIsAuthModalOpen(false);
       return newUser;
     } catch (err) {
-      console.warn('Backend Google Auth failed, activating fallback session:', err);
+      if (!import.meta.env.DEV) {
+        throw err;
+      }
+      console.warn('Backend Google Auth failed, activating dev fallback session:', err);
       const fallbackUser = {
         id: `google-${Date.now()}`,
         name: googleUserData.name || 'Google User',

@@ -213,8 +213,13 @@ router.get('/status', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/payment/dev-activate-pro - Developer test activation toggle
+// POST /api/payment/dev-activate-pro - Developer test activation toggle (non-production only)
 router.post('/dev-activate-pro', requireAuth, async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      error: 'Developer test activation is disabled in production.',
+    });
+  }
   try {
     const isCurrentlyPro = req.user.isPro;
     const expiresAt = new Date();

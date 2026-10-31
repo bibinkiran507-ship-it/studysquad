@@ -15,6 +15,7 @@ import ScrollProgress from './components/ScrollProgress';
 import AuthModal from './components/AuthModal';
 import UserProfileModal from './components/UserProfileModal';
 import LoginPage from './components/LoginPage';
+import LegalPolicyModal from './components/LegalPolicyModal';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useTypewriter } from './hooks/useTypewriter';
 import { squadsAPI, aiAPI, getSocketUrl } from './api/client';
@@ -539,6 +540,7 @@ export default function App() {
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
         <AppRoot />
+        <LegalPolicyModal />
       </AuthProvider>
     </GoogleOAuthProvider>
   );
