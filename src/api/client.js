@@ -179,6 +179,8 @@ export const eventsAPI = {
 export const paymentAPI = {
   createOrder: (plan) => client.post('/payment/create-order', { plan }),
   verifyPayment: (data) => client.post('/payment/verify-payment', data),
+  reconcile: () => client.post('/payment/reconcile'),
+  getHistory: () => client.get('/payment/history'),
   getStatus: () => client.get('/payment/status'),
   devActivatePro: () => client.post('/payment/dev-activate-pro'),
 };

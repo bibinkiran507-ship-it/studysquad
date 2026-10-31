@@ -3,74 +3,138 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import prisma from '../lib/prisma.js';
-import { requireAuth, getJwtSecret, resolveActivePro } from '../middleware/auth.js';
-
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+import prisma, { withRetry } from '../lib/prisma.js';
+import {
+  requireAuth,
+  getJwtSecret,
+  resolveActivePro,
+  invalidateAuthCache,
+} from '../middleware/auth.js';
 
 const router = Router();
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SAFE_DATA_IMAGE_REGEX = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i;
+
+const getGoogleClient = () => new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 // Helper to generate JWT
 const generateToken = (userId) => {
-  return jwt.sign(
-    { userId },
-    getJwtSecret(),
-    { expiresIn: '7d' }
-  );
+  return jwt.sign({ userId }, getJwtSecret(), { expiresIn: '7d' });
+};
+
+const hashResetToken = (rawToken) =>
+  crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+
+const validateAvatarValue = (avatar) => {
+  if (typeof avatar !== 'string') return { ok: false, error: 'Avatar must be a valid URL string.' };
+  const trimmed = avatar.trim();
+  if (!trimmed) return { ok: true, value: '' };
+
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+    if (trimmed.length > 2048) {
+      return { ok: false, error: 'Avatar URL is too long (max 2048 characters).' };
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return { ok: false, error: 'Avatar URL must use https://.' };
+      }
+      return { ok: true, value: trimmed };
+    } catch {
+      return { ok: false, error: 'Invalid avatar URL format.' };
+    }
+  }
+
+  if (SAFE_DATA_IMAGE_REGEX.test(trimmed)) {
+    if (trimmed.length > 220_000) {
+      return { ok: false, error: 'Uploaded avatar image is too large (max 150 KB).' };
+    }
+    return { ok: true, value: trimmed };
+  }
+
+  return {
+    ok: false,
+    error: 'Avatar must be an https:// image URL or a PNG/JPG/WebP image under 150 KB.',
+  };
 };
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password) {
+    const { name, email, password } = req.body || {};
+    if (
+      typeof name !== 'string' ||
+      typeof email !== 'string' ||
+      typeof password !== 'string' ||
+      !name.trim() ||
+      !email.trim() ||
+      !password
+    ) {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
+    }
+
+    const cleanName = name.trim().slice(0, 80);
+    const normalizedEmail = email.toLowerCase().trim();
+
+    if (!EMAIL_REGEX.test(normalizedEmail) || normalizedEmail.length > 160) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
 
     if (password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
+    if (password.length > 128) {
+      return res.status(400).json({ error: 'Password cannot exceed 128 characters.' });
+    }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const existing = await prisma.user.findUnique({
-      where: { email: normalizedEmail }
-    });
+    const existing = await withRetry(() =>
+      prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      })
+    );
 
     if (existing) {
       return res.status(409).json({ error: 'An account with this email already exists.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const avatar = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(name)}`;
+    const avatar = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(cleanName)}`;
 
-    const user = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: normalizedEmail,
-        password: hashedPassword,
-        avatar,
-        isEmailVerified: false,
-        isPro: false,
-        proPlan: 'free',
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar: true,
-        bio: true,
-        pomodoroSessions: true,
-        isEmailVerified: true,
-        isPro: true,
-        proPlan: true,
-        proExpiresAt: true,
-        createdAt: true
-      }
-    });
+    const user = await withRetry(() =>
+      prisma.user.create({
+        data: {
+          name: cleanName,
+          email: normalizedEmail,
+          password: hashedPassword,
+          avatar,
+          isEmailVerified: false,
+          isPro: false,
+          proPlan: 'free',
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          bio: true,
+          pomodoroSessions: true,
+          isEmailVerified: true,
+          isPro: true,
+          proPlan: true,
+          proExpiresAt: true,
+          createdAt: true,
+        },
+      })
+    );
 
     const token = generateToken(user.id);
     return res.status(201).json({ token, user });
   } catch (error) {
+    if (error?.code === 'P2002') {
+      return res.status(409).json({ error: 'An account with this email already exists.' });
+    }
     console.error('Registration error:', error);
     return res.status(500).json({ error: 'Failed to create account.' });
   }
@@ -79,18 +143,31 @@ router.post('/register', async (req, res) => {
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
+    const { email, password } = req.body || {};
+    if (
+      typeof email !== 'string' ||
+      typeof password !== 'string' ||
+      !email.trim() ||
+      !password
+    ) {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await prisma.user.findUnique({
-      where: { email: normalizedEmail }
-    });
-
-    if (!user) {
+    if (password.length > 128) {
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await withRetry(() =>
+      prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      })
+    );
+
+    if (!user || !user.password) {
+      return res.status(401).json({
+        error: 'Invalid email or password. If you signed up with Google, click "Continue with Google".',
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -100,6 +177,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    const activePro = resolveActivePro(user);
     const token = generateToken(user.id);
     return res.json({
       token,
@@ -111,11 +189,11 @@ router.post('/login', async (req, res) => {
         bio: user.bio,
         pomodoroSessions: user.pomodoroSessions,
         isEmailVerified: user.isEmailVerified,
-        isPro: resolveActivePro(user),
-        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
+        isPro: activePro,
+        proPlan: activePro ? user.proPlan || 'monthly' : 'free',
         proExpiresAt: user.proExpiresAt,
-        createdAt: user.createdAt
-      }
+        createdAt: user.createdAt,
+      },
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -126,20 +204,24 @@ router.post('/login', async (req, res) => {
 // POST /api/auth/google - Authenticate with verified Google OAuth token
 router.post('/google', async (req, res) => {
   try {
-    const { accessToken, credential } = req.body;
+    const { accessToken, credential } = req.body || {};
+    const expectedClientId = process.env.GOOGLE_CLIENT_ID;
 
     let verifiedEmail = null;
     let verifiedName = null;
     let verifiedAvatar = null;
 
-    if (credential) {
+    if (typeof credential === 'string' && credential.trim()) {
       // Verify Google ID token JWT
       try {
-        const ticket = await googleClient.verifyIdToken({
+        const ticket = await getGoogleClient().verifyIdToken({
           idToken: credential,
-          audience: process.env.GOOGLE_CLIENT_ID,
+          audience: expectedClientId,
         });
         const payload = ticket.getPayload();
+        if (payload?.email_verified === false) {
+          return res.status(401).json({ error: 'Your Google account email is not verified.' });
+        }
         verifiedEmail = payload?.email;
         verifiedName = payload?.name;
         verifiedAvatar = payload?.picture;
@@ -147,17 +229,38 @@ router.post('/google', async (req, res) => {
         console.error('Google ID token verification failed:', idErr.message);
         return res.status(401).json({ error: 'Invalid Google identity token.' });
       }
-    } else if (accessToken) {
-      // Verify OAuth2 Access Token against Google's API
+    } else if (typeof accessToken === 'string' && accessToken.trim()) {
+      // Verify OAuth2 Access Token audience + profile against Google's official endpoints
       try {
-        const gRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!gRes.ok) {
+        const [tokenInfoRes, gRes] = await Promise.all([
+          fetch(
+            `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`
+          ),
+          fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }),
+        ]);
+
+        if (!tokenInfoRes.ok || !gRes.ok) {
           return res.status(401).json({ error: 'Invalid or expired Google access token.' });
         }
-        const profile = await gRes.json();
-        verifiedEmail = profile?.email;
+
+        const [tokenInfo, profile] = await Promise.all([tokenInfoRes.json(), gRes.json()]);
+
+        // Verify token was minted specifically for our Google OAuth Client ID
+        if (
+          expectedClientId &&
+          tokenInfo.aud !== expectedClientId &&
+          tokenInfo.azp !== expectedClientId
+        ) {
+          return res.status(401).json({ error: 'Google token audience mismatch.' });
+        }
+
+        if (profile?.email_verified === false || tokenInfo?.email_verified === 'false') {
+          return res.status(401).json({ error: 'Your Google account email is not verified.' });
+        }
+
+        verifiedEmail = profile?.email || tokenInfo?.email;
         verifiedName = profile?.name;
         verifiedAvatar = profile?.picture;
       } catch (tokErr) {
@@ -165,7 +268,9 @@ router.post('/google', async (req, res) => {
         return res.status(401).json({ error: 'Failed to verify Google access token.' });
       }
     } else {
-      return res.status(400).json({ error: 'Valid Google OAuth token (accessToken or credential) is required.' });
+      return res
+        .status(400)
+        .json({ error: 'Valid Google OAuth token (accessToken or credential) is required.' });
     }
 
     if (!verifiedEmail) {
@@ -173,33 +278,54 @@ router.post('/google', async (req, res) => {
     }
 
     const normalizedEmail = verifiedEmail.toLowerCase().trim();
-    let user = await prisma.user.findUnique({
-      where: { email: normalizedEmail }
-    });
+    let user = await withRetry(() =>
+      prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      })
+    );
 
     if (!user) {
       const randomPassword = crypto.randomBytes(32).toString('hex') + '!Ggl99';
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
-      const userAvatar = verifiedAvatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(verifiedName || normalizedEmail)}`;
+      const userAvatar =
+        verifiedAvatar ||
+        `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(
+          verifiedName || normalizedEmail
+        )}`;
 
-      user = await prisma.user.create({
-        data: {
-          name: verifiedName ? verifiedName.trim() : normalizedEmail.split('@')[0],
-          email: normalizedEmail,
-          password: hashedPassword,
-          avatar: userAvatar,
-          isEmailVerified: true, // Google accounts are pre-verified
-          isPro: false,
-          proPlan: 'free',
-        },
-      });
-    } else if (verifiedAvatar) {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { avatar: verifiedAvatar, isEmailVerified: true },
-      });
+      user = await withRetry(() =>
+        prisma.user.create({
+          data: {
+            name: verifiedName ? verifiedName.trim().slice(0, 80) : normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+            password: hashedPassword,
+            avatar: userAvatar,
+            isEmailVerified: true,
+            isPro: false,
+            proPlan: 'free',
+          },
+        })
+      );
+    } else {
+      // Preserve any custom avatar the user set; only update if empty or default DiceBear
+      const shouldSyncGoogleAvatar =
+        verifiedAvatar && (!user.avatar || user.avatar.includes('dicebear.com'));
+
+      if (shouldSyncGoogleAvatar || !user.isEmailVerified) {
+        user = await withRetry(() =>
+          prisma.user.update({
+            where: { id: user.id },
+            data: {
+              ...(shouldSyncGoogleAvatar ? { avatar: verifiedAvatar } : {}),
+              isEmailVerified: true,
+            },
+          })
+        );
+        invalidateAuthCache(user.id);
+      }
     }
 
+    const activePro = resolveActivePro(user);
     const token = generateToken(user.id);
     return res.json({
       token,
@@ -211,12 +337,12 @@ router.post('/google', async (req, res) => {
         bio: user.bio || '',
         pomodoroSessions: user.pomodoroSessions || 0,
         isEmailVerified: user.isEmailVerified,
-        isPro: resolveActivePro(user),
-        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
+        isPro: activePro,
+        proPlan: activePro ? user.proPlan || 'monthly' : 'free',
         proExpiresAt: user.proExpiresAt,
         createdAt: user.createdAt,
         provider: 'google',
-      }
+      },
     });
   } catch (error) {
     console.error('Google login error:', error);
@@ -227,36 +353,42 @@ router.post('/google', async (req, res) => {
 // GET /api/auth/me
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    // Fetch fresh user data with squad count
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar: true,
-        bio: true,
-        pomodoroSessions: true,
-        isEmailVerified: true,
-        isPro: true,
-        proPlan: true,
-        proExpiresAt: true,
-        createdAt: true,
-        _count: {
-          select: { memberships: true, ownedSquads: true }
-        }
-      }
-    });
+    const [user, distinctSquadCount] = await withRetry(() =>
+      Promise.all([
+        prisma.user.findUnique({
+          where: { id: req.user.id },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+            bio: true,
+            pomodoroSessions: true,
+            isEmailVerified: true,
+            isPro: true,
+            proPlan: true,
+            proExpiresAt: true,
+            createdAt: true,
+          },
+        }),
+        prisma.squad.count({
+          where: {
+            OR: [{ ownerId: req.user.id }, { members: { some: { userId: req.user.id } } }],
+          },
+        }),
+      ])
+    );
 
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
+    const activePro = resolveActivePro(user);
     return res.json({
       user: {
         ...user,
-        isPro: resolveActivePro(user),
-        proPlan: resolveActivePro(user) ? (user.proPlan || 'monthly') : 'free',
-        squadsJoined: user._count.memberships + user._count.ownedSquads,
-      }
+        isPro: activePro,
+        proPlan: activePro ? user.proPlan || 'monthly' : 'free',
+        squadsJoined: distinctSquadCount,
+      },
     });
   } catch (err) {
     console.error('Get me error:', err);
@@ -267,33 +399,58 @@ router.get('/me', requireAuth, async (req, res) => {
 // PATCH /api/auth/me - Update profile (name, avatar, bio)
 router.patch('/me', requireAuth, async (req, res) => {
   try {
-    const { name, avatar, bio } = req.body;
-    const updated = await prisma.user.update({
-      where: { id: req.user.id },
-      data: {
-        ...(name ? { name: name.trim() } : {}),
-        ...(avatar !== undefined ? { avatar } : {}),
-        ...(bio !== undefined ? { bio: bio.slice(0, 300) } : {})
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar: true,
-        bio: true,
-        pomodoroSessions: true,
-        isEmailVerified: true,
-        isPro: true,
-        proPlan: true,
-        proExpiresAt: true,
-        createdAt: true
-      }
-    });
+    const { name, avatar, bio } = req.body || {};
+    const updateData = {};
 
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'Name cannot be empty.' });
+      }
+      updateData.name = name.trim().slice(0, 80);
+    }
+
+    if (avatar !== undefined) {
+      const avatarCheck = validateAvatarValue(avatar);
+      if (!avatarCheck.ok) {
+        return res.status(400).json({ error: avatarCheck.error });
+      }
+      updateData.avatar = avatarCheck.value;
+    }
+
+    if (bio !== undefined) {
+      if (typeof bio !== 'string') {
+        return res.status(400).json({ error: 'Bio must be text.' });
+      }
+      updateData.bio = bio.trim().slice(0, 300);
+    }
+
+    const updated = await withRetry(() =>
+      prisma.user.update({
+        where: { id: req.user.id },
+        data: updateData,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          bio: true,
+          pomodoroSessions: true,
+          isEmailVerified: true,
+          isPro: true,
+          proPlan: true,
+          proExpiresAt: true,
+          createdAt: true,
+        },
+      })
+    );
+
+    invalidateAuthCache(req.user.id);
+    const activePro = resolveActivePro(updated);
     return res.json({
       user: {
         ...updated,
-        isPro: resolveActivePro(updated),
+        isPro: activePro,
+        proPlan: activePro ? updated.proPlan || 'monthly' : 'free',
       },
     });
   } catch (error) {
@@ -305,11 +462,13 @@ router.patch('/me', requireAuth, async (req, res) => {
 // POST /api/auth/me/pomodoro - Increment pomodoro session count
 router.post('/me/pomodoro', requireAuth, async (req, res) => {
   try {
-    const updated = await prisma.user.update({
-      where: { id: req.user.id },
-      data: { pomodoroSessions: { increment: 1 } },
-      select: { pomodoroSessions: true }
-    });
+    const updated = await withRetry(() =>
+      prisma.user.update({
+        where: { id: req.user.id },
+        data: { pomodoroSessions: { increment: 1 } },
+        select: { pomodoroSessions: true },
+      })
+    );
     return res.json({ pomodoroSessions: updated.pomodoroSessions });
   } catch (err) {
     console.error('Pomodoro increment error:', err);
@@ -320,40 +479,53 @@ router.post('/me/pomodoro', requireAuth, async (req, res) => {
 // POST /api/auth/forgot-password - Request password reset
 router.post('/forgot-password', async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email is required.' });
+    const { email } = req.body || {};
+    if (typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required.' });
+    }
 
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() }
-    });
+    const user = await withRetry(() =>
+      prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+        select: { id: true, email: true },
+      })
+    );
 
     // Always return success to avoid email enumeration
     if (!user) {
-      return res.json({ message: 'If that email is registered, a reset link has been sent.' });
+      return res.json({
+        message: 'If that email is registered, password recovery instructions have been prepared.',
+      });
     }
 
-    // Invalidate any existing unused tokens
-    await prisma.passwordReset.updateMany({
-      where: { userId: user.id, used: false },
-      data: { used: true }
-    });
+    await withRetry(() =>
+      prisma.passwordReset.updateMany({
+        where: { userId: user.id, used: false },
+        data: { used: true },
+      })
+    );
 
-    const token = crypto.randomBytes(32).toString('hex');
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = hashResetToken(rawToken);
     const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
 
-    await prisma.passwordReset.create({
-      data: { userId: user.id, token, expiresAt }
-    });
+    await withRetry(() =>
+      prisma.passwordReset.create({
+        data: { userId: user.id, token: hashedToken, expiresAt },
+      })
+    );
 
-    // In production, send email. For now, return the token in response (dev mode)
     const isDev = process.env.NODE_ENV !== 'production';
-    const resetLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/reset-password?token=${token}`;
+    const resetLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/login?resetToken=${rawToken}`;
 
-    console.log(`[Password Reset] Token for ${user.email}: ${token}`);
+    if (isDev) {
+      console.log(`[Password Reset] Dev reset link generated for ${user.email}`);
+    }
 
     return res.json({
-      message: 'If that email is registered, a reset link has been sent.',
-      ...(isDev ? { devResetToken: token, devResetLink: resetLink } : {})
+      message:
+        'If that email is registered, a password reset link has been sent. You can also sign in instantly using "Continue with Google" with the same email!',
+      ...(isDev ? { devResetToken: rawToken, devResetLink: resetLink } : {}),
     });
   } catch (err) {
     console.error('Forgot password error:', err);
@@ -364,19 +536,33 @@ router.post('/forgot-password', async (req, res) => {
 // POST /api/auth/reset-password - Complete password reset with token
 router.post('/reset-password', async (req, res) => {
   try {
-    const { token, newPassword } = req.body;
-    if (!token || !newPassword) {
+    const { token, newPassword } = req.body || {};
+    if (
+      typeof token !== 'string' ||
+      typeof newPassword !== 'string' ||
+      !token.trim() ||
+      !newPassword
+    ) {
       return res.status(400).json({ error: 'Token and new password are required.' });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
+    if (newPassword.length > 128) {
+      return res.status(400).json({ error: 'Password cannot exceed 128 characters.' });
+    }
 
-    const resetRecord = await prisma.passwordReset.findUnique({
-      where: { token },
-      include: { user: true }
-    });
+    const cleanToken = token.trim();
+    const hashedCandidate = hashResetToken(cleanToken);
+
+    const resetRecord = await withRetry(() =>
+      prisma.passwordReset.findFirst({
+        where: {
+          OR: [{ token: hashedCandidate }, { token: cleanToken }],
+        },
+      })
+    );
 
     if (!resetRecord || resetRecord.used) {
       return res.status(400).json({ error: 'Reset link is invalid or has already been used.' });
@@ -388,18 +574,30 @@ router.post('/reset-password', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    await prisma.user.update({
-      where: { id: resetRecord.userId },
-      data: { password: hashedPassword }
-    });
+    await withRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const markUsed = await tx.passwordReset.updateMany({
+          where: { id: resetRecord.id, used: false },
+          data: { used: true },
+        });
+        if (markUsed.count === 0) {
+          const usedErr = new Error('Reset link has already been used.');
+          usedErr.statusCode = 400;
+          throw usedErr;
+        }
+        await tx.user.update({
+          where: { id: resetRecord.userId },
+          data: { password: hashedPassword },
+        });
+      })
+    );
 
-    await prisma.passwordReset.update({
-      where: { token },
-      data: { used: true }
-    });
-
+    invalidateAuthCache(resetRecord.userId);
     return res.json({ message: 'Password updated successfully. You can now log in.' });
   } catch (err) {
+    if (err.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('Reset password error:', err);
     return res.status(500).json({ error: 'Failed to reset password.' });
   }
@@ -408,28 +606,34 @@ router.post('/reset-password', async (req, res) => {
 // GET /api/auth/user/:id - Get public profile of any user
 router.get('/user/:id', async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.params.id },
-      select: {
-        id: true,
-        name: true,
-        avatar: true,
-        bio: true,
-        pomodoroSessions: true,
-        createdAt: true,
-        _count: {
-          select: { memberships: true, ownedSquads: true }
-        }
-      }
-    });
+    const [user, distinctSquadCount] = await withRetry(() =>
+      Promise.all([
+        prisma.user.findUnique({
+          where: { id: req.params.id },
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+            bio: true,
+            pomodoroSessions: true,
+            createdAt: true,
+          },
+        }),
+        prisma.squad.count({
+          where: {
+            OR: [{ ownerId: req.params.id }, { members: { some: { userId: req.params.id } } }],
+          },
+        }),
+      ])
+    );
 
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
     return res.json({
       user: {
         ...user,
-        squadsJoined: user._count.memberships + user._count.ownedSquads,
-      }
+        squadsJoined: distinctSquadCount,
+      },
     });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to get user.' });

@@ -25,6 +25,52 @@ import {
 import { eventsAPI } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
+// Format YYYY-MM-DD in the student's local timezone (avoids UTC/IST off-by-1-day bug)
+function formatLocalDateInput(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function escapeIcsValue(str = '') {
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
+}
+
+function downloadLocalIcs(ev) {
+  const start = new Date(ev.date);
+  const end = new Date(start.getTime() + (ev.duration || 60) * 60 * 1000);
+  const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//StudySquad AI//Calendar//EN',
+    'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    `UID:${ev.id}@studysquadai.com`,
+    `DTSTAMP:${fmt(new Date())}`,
+    `DTSTART:${fmt(start)}`,
+    `DTEND:${fmt(end)}`,
+    `SUMMARY:${escapeIcsValue(ev.title)}`,
+    `DESCRIPTION:${escapeIcsValue(ev.description || ev.subject || 'StudySquad Scheduled Milestone')}`,
+    `LOCATION:${escapeIcsValue(ev.location || 'https://studysquadai.com')}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(ev.title || 'StudySquad_Event').replace(/[^a-zA-Z0-9_-]/g, '_')}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // Default starter milestones if none exist yet
 const INITIAL_DEMO_EVENTS = [
   {
@@ -116,18 +162,19 @@ export default function StudyCalendarModal({
   useEffect(() => {
     if (isOpen) {
       loadEvents();
-      // Default form date to today
-      const todayIso = new Date().toISOString().split('T')[0];
-      setFormDate(todayIso);
+      setNow(Date.now());
+      // Default form date to today in local timezone
+      setFormDate(formatLocalDateInput(new Date()));
     }
   }, [isOpen]);
 
-  // Live timer tick for countdowns
+  // Live timer tick for countdowns (ONLY runs while modal is open — zero idle CPU ticks!)
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (!isOpen) return undefined;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [isOpen]);
 
   // Compute upcoming exams for countdown cards
   const upcomingExams = useMemo(() => {
@@ -177,12 +224,12 @@ export default function StudyCalendarModal({
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
 
-  // Group events by day in current view
+  // Group filtered events by day in current view
   const eventsByDay = useMemo(() => {
     const y = currentDate.getFullYear();
     const m = currentDate.getMonth();
     const map = {};
-    events.forEach((ev) => {
+    filteredEvents.forEach((ev) => {
       const d = new Date(ev.date);
       if (d.getFullYear() === y && d.getMonth() === m) {
         const dayNum = d.getDate();
@@ -191,11 +238,11 @@ export default function StudyCalendarModal({
       }
     });
     return map;
-  }, [events, currentDate]);
+  }, [filteredEvents, currentDate]);
 
-  // Events on currently selected date
+  // Filtered events on currently selected date
   const selectedDayEvents = useMemo(() => {
-    return events.filter((ev) => {
+    return filteredEvents.filter((ev) => {
       const d = new Date(ev.date);
       return (
         d.getFullYear() === selectedDate.getFullYear() &&
@@ -203,7 +250,7 @@ export default function StudyCalendarModal({
         d.getDate() === selectedDate.getDate()
       );
     });
-  }, [events, selectedDate]);
+  }, [filteredEvents, selectedDate]);
 
   // Create new event
   const handleCreateEvent = async (e) => {
@@ -302,9 +349,14 @@ export default function StudyCalendarModal({
       });
     } catch (err) {
       console.error('Error getting AI study plan:', err);
+      const isLimit =
+        err.response?.status === 403 &&
+        (err.response?.data?.error === 'DAILY_AI_LIMIT_REACHED' ||
+          err.response?.data?.upgradeRequired);
       const target = new Date(exam.date).getTime();
       const daysLeft = Math.max(1, Math.ceil((target - Date.now()) / (1000 * 60 * 60 * 24)));
-      const fallback = `📅 **${daysLeft}-Day Exam Countdown Strategy: ${exam.title || exam.subject}**\n\n` +
+      const fallback =
+        `📅 **${daysLeft}-Day Exam Countdown Strategy: ${exam.title || exam.subject}**\n\n` +
         `🎯 **Phase 1: Diagnostic & High-Yield Concepts (Days 1–${Math.max(1, Math.floor(daysLeft * 0.4))})**\n` +
         `• Audit the syllabus: identify high-weight topics and formula derivations.\n` +
         `• Build active recall flashcards in the AI Quiz & Cards studio.\n\n` +
@@ -312,8 +364,10 @@ export default function StudyCalendarModal({
         `• Practice timed past exam questions under 25-minute Pomodoro sprints.\n` +
         `• Host a peer whiteboard review session in your Squad Room.\n\n` +
         `🏆 **Phase 3: Final Polish (Day Before Exam)**\n` +
-        `• Light formula sheet scan, prepare your exam kit, and get 8 hours of sleep!\n\n` +
-        `💡 *Tip: Ensure the backend server is running on port 3001 to get custom real-time Google Gemini generation.*`;
+        `• Light formula sheet scan, prepare your exam kit, and get 8 hours of sleep!` +
+        (isLimit
+          ? `\n\n👑 *Note: You've used your 5 free daily AI credits today. Upgrade to StudySquad Pro for unlimited custom Gemini exam plans!*`
+          : '');
 
       setAiPlanModal((prev) => ({
         ...prev,
@@ -652,30 +706,51 @@ export default function StudyCalendarModal({
                         </button>
 
                         <div className="flex items-center gap-1.5">
-                          {/* ICS Download */}
-                          <a
-                            href={eventsAPI.exportIcsUrl(exam.id)}
-                            download
-                            title="Export to Google/Apple Calendar (.ics)"
-                            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-
-                          {/* Jump to room if squad attached */}
-                          {exam.squad && onOpenSquadRoom && (
+                          {/* ICS Download (supports both DB and starter demo events) */}
+                          {String(exam.id).startsWith('demo-') || String(exam.id).startsWith('local-') ? (
                             <button
                               type="button"
-                              onClick={() => {
-                                onClose();
-                                onOpenSquadRoom(exam.squad);
-                              }}
-                              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                              onClick={() => downloadLocalIcs(exam)}
+                              title="Export to Google/Apple Calendar (.ics)"
+                              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
                             >
-                              <span>Study</span>
-                              <ArrowRight className="w-3 h-3" />
+                              <Download className="w-3.5 h-3.5" />
                             </button>
+                          ) : (
+                            <a
+                              href={eventsAPI.exportIcsUrl(exam.id)}
+                              download
+                              title="Export to Google/Apple Calendar (.ics)"
+                              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
                           )}
+
+                          {/* Jump to room if real squad exists */}
+                          {(() => {
+                            const targetSquad =
+                              squads.find(
+                                (s) =>
+                                  (exam.squadId && s.id === exam.squadId) ||
+                                  (exam.squad?.id && s.id === exam.squad.id) ||
+                                  (exam.squad?.name && s.name === exam.squad.name)
+                              ) || (exam.squad?.id ? exam.squad : null);
+                            if (!targetSquad || !onOpenSquadRoom) return null;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  onOpenSquadRoom(targetSquad);
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                              >
+                                <span>Study</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -868,8 +943,7 @@ export default function StudyCalendarModal({
                       <button
                         type="button"
                         onClick={() => {
-                          const iso = selectedDate.toISOString().split('T')[0];
-                          setFormDate(iso);
+                          setFormDate(formatLocalDateInput(selectedDate));
                           setIsAddFormOpen(true);
                         }}
                         className="mt-3 text-emerald-400 hover:text-emerald-300 font-semibold inline-flex items-center gap-1 cursor-pointer"
@@ -936,14 +1010,25 @@ export default function StudyCalendarModal({
                               >
                                 <Check className="w-3.5 h-3.5" />
                               </button>
-                              <a
-                                href={eventsAPI.exportIcsUrl(ev.id)}
-                                download
-                                title="Download .ics"
-                                className="p-1 rounded-md text-neutral-500 hover:text-neutral-300"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                              </a>
+                              {String(ev.id).startsWith('demo-') || String(ev.id).startsWith('local-') ? (
+                                <button
+                                  type="button"
+                                  onClick={() => downloadLocalIcs(ev)}
+                                  title="Download .ics"
+                                  className="p-1 rounded-md text-neutral-500 hover:text-neutral-300 cursor-pointer"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </button>
+                              ) : (
+                                <a
+                                  href={eventsAPI.exportIcsUrl(ev.id)}
+                                  download
+                                  title="Download .ics"
+                                  className="p-1 rounded-md text-neutral-500 hover:text-neutral-300"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </a>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleDeleteEvent(ev.id)}
@@ -967,8 +1052,7 @@ export default function StudyCalendarModal({
                 <button
                   type="button"
                   onClick={() => {
-                    const iso = selectedDate.toISOString().split('T')[0];
-                    setFormDate(iso);
+                    setFormDate(formatLocalDateInput(selectedDate));
                     setIsAddFormOpen(true);
                   }}
                   className="text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"

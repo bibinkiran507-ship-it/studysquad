@@ -284,7 +284,15 @@ function FormattedChatMessage({ content }) {
   );
 }
 
-export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onOpenProModal }) {
+function isPaywallError(err) {
+  return (
+    err?.response?.status === 403 &&
+    (err?.response?.data?.error === 'DAILY_AI_LIMIT_REACHED' ||
+      err?.response?.data?.upgradeRequired)
+  );
+}
+
+export default function AIStudyStudio({ squad, user, socket, openAuthModal, onOpenProModal }) {
   // Mode: 'flashcards' | 'quiz'
   const [mode, setMode] = useState('flashcards');
 
@@ -339,6 +347,7 @@ export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onO
   );
   const [auditLanguage, setAuditLanguage] = useState('javascript');
   const [auditResult, setAuditResult] = useState(null);
+  const [auditError, setAuditError] = useState('');
   const [isAuditing, setIsAuditing] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
 
@@ -355,6 +364,7 @@ export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onO
   const [chatInput, setChatInput] = useState('');
   const [chatPastedImage, setChatPastedImage] = useState(null);
   const fileInputRef = useRef(null);
+  const tutorChatEndRef = useRef(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [chatCopiedId, setChatCopiedId] = useState(null);
 
@@ -363,7 +373,10 @@ export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onO
   const [dailyUsage, setDailyUsage] = useState(null);
 
   const refreshUsage = async () => {
-    if (!user) return;
+    if (!user) {
+      setDailyUsage(null);
+      return;
+    }
     try {
       const res = await aiAPI.getUsage();
       setDailyUsage(res.data);
@@ -374,8 +387,21 @@ export default function AIStudyStudio({ squad, user, _socket, openAuthModal, onO
 
   useEffect(() => {
     refreshUsage();
+    const handleProActivated = () => {
+      refreshUsage();
+      setStatusMessage('');
+      setAuditError('');
+    };
+    window.addEventListener('studysquad:pro-activated', handleProActivated);
+    return () => window.removeEventListener('studysquad:pro-activated', handleProActivated);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id, user?.isPro]);
+
+  useEffect(() => {
+    if (mode === 'chat') {
+      tutorChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages.length, isChatLoading, mode]);
 
   // Flashcards are generated on-demand when user clicks "Generate" — not auto-fired on mount
   // This avoids blocking the UI thread and allows the tab to open instantly.
@@ -1091,6 +1117,13 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         }
       }
     } catch (err) {
+      if (isPaywallError(err)) {
+        setStatusMessage(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) for unlimited AI flashcards & quizzes!'
+        );
+        return;
+      }
+
       console.warn('Backend AI unavailable, activating smart curated fallback deck:', err.message);
       // Graceful offline fallback: Load curated high-yield study cards
       if (targetMode === 'flashcards') {
@@ -1117,8 +1150,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         setPoweredBy('Curated Study Engine');
       }
 
-      // Friendly notification reminding them to start backend server if desired
-      setStatusMessage('💡 Tip: Start your backend server (cd backend && node server.js) for live Google Gemini AI generation.');
+      setStatusMessage(
+        'Loaded curated high-yield study deck while live AI service wakes up. Click Generate again in a moment for custom AI cards.'
+      );
       setTimeout(() => setStatusMessage(''), 8000);
     } finally {
       setIsGenerating(false);
@@ -1202,7 +1236,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
     return correct;
   };
 
-  // Broadcast quiz victory to squad chat via REST API / Socket
+  // Broadcast quiz victory to squad chat via live Socket (with REST fallback)
   const handleShareQuizScore = async () => {
     if (!user) {
       openAuthModal?.('login');
@@ -1215,7 +1249,15 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
     const content = `🏆 Completed the **${squad.subject}** Practice Quiz with **${score}/${total}** (${pct}%)! Challenge your squad to beat it!`;
 
     try {
-      await squadsAPI.sendMessage(squad.id, content);
+      if (socket?.connected) {
+        socket.emit('send_message', {
+          squadId: squad.id,
+          userId: user.id,
+          content,
+        });
+      } else {
+        await squadsAPI.sendMessage(squad.id, content);
+      }
       setSharedToast(true);
       setTimeout(() => setSharedToast(false), 3000);
     } catch (err) {
@@ -1236,6 +1278,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
     try {
       setIsSubmittingViva(true);
+      setStatusMessage('');
       const exclusions = [];
       if (vivaQuestion) exclusions.push(vivaQuestion);
       vivaHistory.forEach((h) => {
@@ -1260,6 +1303,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       setIsVivaActive(true);
       setIsVivaFinished(false);
     } catch (err) {
+      if (isPaywallError(err)) {
+        setStatusMessage(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) for unlimited Mock Viva rounds!'
+        );
+        return;
+      }
       console.warn('Viva start error, using fallback:', err.message);
       const fallbackQuestions = [
         `What is the core working invariant of ${activeTopic}, and why does it prevent failure under concurrent or edge execution?`,
@@ -1278,6 +1327,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       setIsVivaFinished(false);
     } finally {
       setIsSubmittingViva(false);
+      refreshUsage();
     }
   };
 
@@ -1341,6 +1391,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         setIsVivaFinished(true);
       }
     } catch (err) {
+      if (isPaywallError(err)) {
+        setStatusMessage(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) to continue grading your oral Viva answers!'
+        );
+        return;
+      }
       console.warn('Viva answer submit error:', err.message);
       const fallbackEntry = {
         question: vivaQuestion,
@@ -1363,6 +1419,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       }
     } finally {
       setIsSubmittingViva(false);
+      refreshUsage();
     }
   };
 
@@ -1474,36 +1531,30 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
     try {
       let res;
+      const requestPayload = {
+        squadId: squad?.id,
+        query: displayText,
+        image: currentImage,
+        context: {
+          subject: squad?.subject || 'Academics',
+          category: squad?.category || 'General Studies',
+          squadName: squad?.name || 'StudySquad',
+          sharedNotes: squad?.sharedNotes || '',
+        },
+        history: newMessages,
+        mode: 'chat',
+      };
+
       try {
-        res = await aiAPI.askSquadBot({
-          squadId: squad?.id,
-          query: displayText,
-          image: currentImage,
-          context: {
-            subject: squad?.subject || 'Academics',
-            category: squad?.category || 'General Studies',
-            squadName: squad?.name || 'StudySquad',
-            sharedNotes: squad?.sharedNotes || '',
-          },
-          history: newMessages,
-          mode: 'chat',
-        });
+        res = await aiAPI.askSquadBot(requestPayload);
       } catch (firstErr) {
-        // Quick 500ms retry in case of a momentary connection blip
+        // Do not retry 4xx client/paywall errors; only retry transient network or 5xx blips
+        const status = firstErr?.response?.status;
+        if (status && status >= 400 && status < 500) {
+          throw firstErr;
+        }
         await new Promise((r) => setTimeout(r, 500));
-        res = await aiAPI.askSquadBot({
-          squadId: squad?.id,
-          query: displayText,
-          image: currentImage,
-          context: {
-            subject: squad?.subject || 'Academics',
-            category: squad?.category || 'General Studies',
-            squadName: squad?.name || 'StudySquad',
-            sharedNotes: squad?.sharedNotes || '',
-          },
-          history: newMessages,
-          mode: 'chat',
-        });
+        res = await aiAPI.askSquadBot(requestPayload);
       }
 
       const aiMsg = {
@@ -1516,6 +1567,18 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
       setChatMessages((prev) => [...prev, aiMsg]);
     } catch (err) {
+      if (isPaywallError(err)) {
+        const paywallMsg = {
+          id: `ai-paywall-${Date.now()}`,
+          sender: 'ai',
+          text: `👑 **You've used all 5 free daily AI credits for today!**\n\nUpgrade to **StudySquad Pro (₹199/month or ₹999/year)** for **unlimited** 24/7 AI Study Tutor answers, screenshot problem solving, Mock Vivas, Cheat Sheets, and Code Audits — or return after **12:00 AM IST** when your 5 free credits reset.`,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          poweredBy: 'StudySquad Pro',
+        };
+        setChatMessages((prev) => [...prev, paywallMsg]);
+        return;
+      }
+
       console.warn('AI chat error:', err.message);
       const lower = textToSend.toLowerCase().trim();
       let fallbackText = '';
@@ -1542,6 +1605,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       setChatMessages((prev) => [...prev, fallbackAiMsg]);
     } finally {
       setIsChatLoading(false);
+      refreshUsage();
     }
   };
 
@@ -1571,6 +1635,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
     }
     try {
       setIsGeneratingSheet(true);
+      setStatusMessage('');
       const res = await aiAPI.generateCheatsheet({
         subject: squad?.subject || 'Academics',
         topic: customTopic || squad?.name || squad?.subject || 'Study Subject',
@@ -1578,6 +1643,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       });
       setCheatSheetText(res.data?.cheatSheet || 'Cheat sheet generated successfully!');
     } catch (err) {
+      if (isPaywallError(err)) {
+        setStatusMessage(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) for unlimited 1-Page Cheat Sheets!'
+        );
+        return;
+      }
       console.warn('Cheat sheet generation error:', err.message);
       setCheatSheetText(
         `# ⚡ ${((customTopic || squad?.subject || 'STUDY')).toUpperCase()} — 1-PAGE HIGH-YIELD REVISION CHEAT SHEET\n\n` +
@@ -1604,6 +1675,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       );
     } finally {
       setIsGeneratingSheet(false);
+      refreshUsage();
     }
   };
 
@@ -1637,6 +1709,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
     const topicToExplain = feynmanInput.trim() || customTopic || squad?.subject || 'Core Concept';
     try {
       setIsGeneratingFeynman(true);
+      setStatusMessage('');
       const res = await aiAPI.feynmanExplain({
         concept: topicToExplain,
         subject: squad?.subject || 'Academics',
@@ -1647,6 +1720,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         throw new Error('Incomplete concept explanation received');
       }
     } catch (err) {
+      if (isPaywallError(err)) {
+        setStatusMessage(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) for unlimited Feynman 3-Tier Explanations!'
+        );
+        return;
+      }
       console.warn('Feynman explainer error:', err.message);
       setFeynmanResult({
         concept: topicToExplain,
@@ -1661,6 +1740,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       });
     } finally {
       setIsGeneratingFeynman(false);
+      refreshUsage();
     }
   };
 
@@ -1674,6 +1754,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
     try {
       setIsAuditing(true);
+      setAuditError('');
+      setStatusMessage('');
       const res = await aiAPI.codeAudit({
         code: auditCode,
         language: auditLanguage,
@@ -1682,21 +1764,19 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       setAuditResult(res.data);
     } catch (err) {
       console.warn('Code audit error:', err.message);
-      setAuditResult({
-        status: 'Optimal',
-        timeComplexity: 'O(n) - Single-pass linear scan with Hash Map',
-        spaceComplexity: 'O(n) - Auxiliary memory for frequency table',
-        critique: 'Clean and idiomatic solution with excellent separation of concerns. Guard clauses properly handle single-element edge cases.',
-        edgeCases: [
-          'Null, undefined, or empty arrays.',
-          'Duplicate values satisfying the target condition simultaneously.',
-          'Large numbers exceeding integer overflow thresholds.'
-        ],
-        optimizedCode: `// Optimized Solution with Defensive Bounds Checking\nfunction findTwoSum(nums, target) {\n  if (!Array.isArray(nums) || nums.length < 2) return [];\n  \n  const lookup = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    const complement = target - nums[i];\n    if (lookup.has(complement)) {\n      return [lookup.get(complement), i];\n    }\n    lookup.set(nums[i], i);\n  }\n  return [];\n}`,
-        keyAdvice: 'Always include defensive type checking and early exit returns for inputs smaller than minimal problem scale!'
-      });
+      if (isPaywallError(err)) {
+        setAuditError(
+          '👑 Daily 5/5 free AI limit reached — Upgrade to StudySquad Pro (₹199/mo) for unlimited AI Code & Solution Audits!'
+        );
+      } else {
+        setAuditError(
+          err.response?.data?.message ||
+            'AI Code Auditor is temporarily waking up. Your code is untouched — please click Run Audit again in a few seconds.'
+        );
+      }
     } finally {
       setIsAuditing(false);
+      refreshUsage();
     }
   };
 
@@ -1711,20 +1791,99 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
     ? Math.round((masteredIds.size / flashcards.length) * 100)
     : 0;
 
+  const isProUser = Boolean(user?.isPro || dailyUsage?.isPro);
+  const freeLimit = dailyUsage?.limit && dailyUsage.limit <= 20 ? dailyUsage.limit : 5;
+  const freeUsed = Math.min(freeLimit, dailyUsage?.used ?? 0);
+  const freeRemaining = Math.max(0, dailyUsage?.remaining ?? freeLimit - freeUsed);
+
   return (
     <div className="space-y-4">
-      {/* ─── Sleek Status Ribbon ─── */}
-      <div className="px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300 gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span className="font-bold">
-            All 7 AI Academic Engines Unlocked • Full access to 3D Flashcards, Practice Quiz, AI Tutor, Mock Viva, Cheat Sheet, Feynman Explainer & Code Audit
+      {/* ─── Live Pro / Freemium Credit Meter Ribbon (Visible Across All 7 AI Engines) ─── */}
+      {isProUser ? (
+        <div className="px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-emerald-500/15 border border-amber-400/35 flex items-center justify-between text-xs text-amber-200 gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Crown className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="font-bold">
+              StudySquad Pro Active • Unlimited AI Generations Across All 7 Academic Engines
+            </span>
+          </div>
+          <span className="text-[10px] uppercase font-black bg-amber-400/20 text-amber-300 px-2.5 py-0.5 rounded-full border border-amber-400/40 shrink-0">
+            Pro Unlimited
           </span>
         </div>
-        <span className="text-[10px] uppercase font-black bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30 shrink-0">
-          All Access
-        </span>
-      </div>
+      ) : user ? (
+        <div
+          className={`px-3.5 py-2.5 rounded-xl border flex items-center justify-between text-xs gap-2.5 flex-wrap ${
+            freeRemaining === 0
+              ? 'bg-rose-950/35 border-rose-500/35 text-rose-200'
+              : freeRemaining <= 2
+              ? 'bg-amber-950/30 border-amber-500/35 text-amber-200'
+              : 'bg-white/[0.04] border-white/15 text-neutral-200'
+          }`}
+        >
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center gap-1" title={`${freeRemaining}/${freeLimit} free daily credits remaining`}>
+              {[...Array(freeLimit)].map((_, idx) => (
+                <span
+                  key={idx}
+                  className={`w-2.5 h-2.5 rounded-full transition-all ${
+                    idx < freeUsed
+                      ? freeRemaining === 0
+                        ? 'bg-rose-400'
+                        : 'bg-amber-400'
+                      : 'bg-emerald-400/80'
+                  }`}
+                />
+              ))}
+            </div>
+            <span className="font-semibold">
+              {freeRemaining === 0
+                ? '0/5 Free AI Credits Left Today • Resets 12:00 AM IST'
+                : `${freeRemaining}/${freeLimit} Free AI Credits Left Today • Resets 12:00 AM IST`}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onOpenProModal?.()}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-neutral-950 font-black text-[11px] cursor-pointer shadow-sm transition-all shrink-0"
+          >
+            <Crown className="w-3 h-3" />
+            <span>Upgrade to Pro • ₹199/mo</span>
+          </button>
+        </div>
+      ) : (
+        <div className="px-3.5 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-200 gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-bold">
+              Sign in for 5 Free AI Generations Every Day across 3D Flashcards, Quiz, AI Tutor, Viva, Cheat Sheet & Code Audit
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => openAuthModal?.('register')}
+            className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-[11px] cursor-pointer transition-colors shrink-0"
+          >
+            Sign In Free
+          </button>
+        </div>
+      )}
+
+      {statusMessage && (
+        <div className="px-3.5 py-2.5 rounded-xl bg-amber-950/35 border border-amber-500/35 flex items-center justify-between gap-2 text-xs text-amber-200 flex-wrap">
+          <span className="font-medium">{statusMessage}</span>
+          {!isProUser && user && statusMessage.includes('Upgrade') && (
+            <button
+              type="button"
+              onClick={() => onOpenProModal?.()}
+              className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[11px] cursor-pointer shrink-0"
+            >
+              Unlock Unlimited
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ─── Mode Switcher Header Card ─── */}
       <div className="p-3.5 sm:p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
@@ -1747,7 +1906,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 )}
               </div>
               <p className="text-[11px] text-neutral-400 truncate hidden sm:block">
-                6 specialized AI engines for 3D active recall, oral vivas, cheat sheets & solution audits.
+                7 specialized AI engines for 3D active recall, 24/7 AI tutoring, oral vivas, cheat sheets & solution audits.
               </p>
             </div>
           </div>
@@ -1956,54 +2115,6 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
               placeholder="e.g. Dijkstra algorithm, Matrix transformations, Cell mitosis, Organic chemistry reactions..."
               className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/15 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400/50"
             />
-          </div>
-        )}
-
-        {statusMessage && (
-          <p className="text-xs text-rose-400 font-medium">{statusMessage}</p>
-        )}
-
-        {/* ─── Daily Free Query Counter Badge ─── */}
-        {dailyUsage && !dailyUsage.isPro && (
-          <div className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-semibold ${
-            dailyUsage.remaining === 0
-              ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
-              : dailyUsage.remaining <= 2
-              ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
-              : 'bg-white/[0.03] border-white/10 text-neutral-400'
-          }`}>
-            <div className="flex items-center gap-2">
-              <div className="flex gap-0.5">
-                {[...Array(5)].map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-2.5 h-2.5 rounded-full transition-all ${
-                      i < dailyUsage.used
-                        ? dailyUsage.remaining === 0 ? 'bg-rose-400' : 'bg-amber-400'
-                        : 'bg-white/15'
-                    }`}
-                  />
-                ))}
-              </div>
-              <span>
-                {dailyUsage.remaining === 0
-                  ? 'Daily limit reached — Upgrade for unlimited AI'
-                  : `${dailyUsage.used}/${dailyUsage.limit} free AI queries used today`}
-              </span>
-            </div>
-            {dailyUsage.remaining === 0 ? (
-              <button
-                type="button"
-                onClick={() => onOpenProModal?.()}
-                className="px-2.5 py-1 rounded-lg bg-amber-400 text-neutral-950 font-black text-[10px] cursor-pointer hover:bg-amber-300 transition-colors"
-              >
-                Upgrade
-              </button>
-            ) : (
-              <span className={`font-bold ${dailyUsage.remaining <= 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                {dailyUsage.remaining} left
-              </span>
-            )}
           </div>
         )}
       </div>
@@ -2384,11 +2495,17 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 <h5 className="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
                   <span>AI Study Copilot & Tutor</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
-                    ChatGPT Engine
+                    Gemini Vision + Tutor
                   </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 flex items-center gap-1">
-                    <Sparkles className="w-2.5 h-2.5 text-emerald-400" /> Full Access
-                  </span>
+                  {isProUser ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
+                      <Crown className="w-2.5 h-2.5 text-amber-400" /> Pro Unlimited
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 flex items-center gap-1">
+                      <Sparkles className="w-2.5 h-2.5 text-emerald-400" /> {freeRemaining}/{freeLimit} Free Today
+                    </span>
+                  )}
                 </h5>
                 <p className="text-xs text-neutral-400">
                   Ask anything about {customTopic || squad?.subject || 'your studies'} • Step-by-step problem solving & code explanations
@@ -2521,6 +2638,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                   </div>
                 </div>
               )}
+
+              <div ref={tutorChatEndRef} />
             </div>
 
             {/* Attached Screenshot Preview Banner */}
@@ -3190,6 +3309,25 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 placeholder="// Paste your algorithm or solution code here..."
               />
             </div>
+
+            {/* Audit Error / Paywall Banner */}
+            {auditError && (
+              <div className="p-4 rounded-2xl bg-rose-950/35 border border-rose-500/35 flex items-center justify-between gap-3 flex-wrap text-xs text-rose-200">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="font-medium">{auditError}</span>
+                </div>
+                {!isProUser && auditError.includes('Upgrade') && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProModal?.()}
+                    className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs cursor-pointer transition-colors shrink-0"
+                  >
+                    Upgrade to Pro • ₹199
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Audit Results Panel */}
             {auditResult && (

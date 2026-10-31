@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   BookOpen,
   FileText,
@@ -126,7 +126,7 @@ function PdfSlideCard({ res, user, squad, onDelete, onChatWithDoc }) {
             <button
               type="button"
               onClick={() => onDelete(res.id)}
-              className="text-neutral-500 hover:text-rose-400 p-1 opacity-0 group-hover/res:opacity-100 transition-opacity cursor-pointer"
+              className="text-neutral-400 hover:text-rose-400 p-1 opacity-100 sm:opacity-0 sm:group-hover/res:opacity-100 transition-opacity cursor-pointer"
               title="Delete Document"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -185,9 +185,9 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const parsed = useMemo(() => parseGitHubRepo(res.url), [res.url]);
 
   useEffect(() => {
-    const parsed = parseGitHubRepo(res.url);
     if (!parsed) {
       setLoading(false);
       setError(true);
@@ -216,7 +216,7 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
     return () => {
       isCurrent = false;
     };
-  }, [res.url]);
+  }, [parsed]);
 
   const langColor = meta?.language ? LANGUAGE_COLORS[meta.language] || "#8b949e" : null;
   const canDelete = user && (res.createdById === user.id || squad.ownerId === user.id);
@@ -260,7 +260,7 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
           <button
             type="button"
             onClick={() => onDelete(res.id)}
-            className="text-neutral-600 hover:text-rose-400 p-1 opacity-0 group-hover/res:opacity-100 transition-opacity cursor-pointer shrink-0"
+            className="text-neutral-400 hover:text-rose-400 p-1 opacity-100 sm:opacity-0 sm:group-hover/res:opacity-100 transition-opacity cursor-pointer shrink-0"
             title="Remove"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -364,7 +364,7 @@ function GenericResourceCard({ res, user, squad, onDelete, onChatWithDoc }) {
             <button
               type="button"
               onClick={() => onDelete(res.id)}
-              className="text-neutral-500 hover:text-rose-400 p-1 opacity-0 group-hover/res:opacity-100 transition-opacity cursor-pointer"
+              className="text-neutral-400 hover:text-rose-400 p-1 opacity-100 sm:opacity-0 sm:group-hover/res:opacity-100 transition-opacity cursor-pointer"
               title="Delete"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -454,11 +454,22 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
       ]);
     } catch (err) {
       console.error('Doc AI Error:', err);
+      const isLimit =
+        err.response?.status === 403 &&
+        (err.response?.data?.error === 'DAILY_AI_LIMIT_REACHED' ||
+          err.response?.data?.upgradeRequired);
+      if (isLimit && onOpenProModal) {
+        onOpenProModal();
+      }
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: '⚠️ Failed to analyze document. Please check that the server is running or configure GEMINI_API_KEY in backend/.env.',
+          content: isLimit
+            ? '👑 You have used all 5 free daily AI credits. Upgrade to StudySquad Pro for unlimited Document AI Q&A across PDFs, Word docs, and PowerPoint slides!'
+            : err.response?.data?.message ||
+              err.response?.data?.error ||
+              '⚠️ Unable to analyze this document right now. Please try again in a moment.',
         }
       ]);
     } finally {
@@ -609,6 +620,8 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
   const [saveStatus, setSaveStatus] = useState("saved");
   const [copiedNotes, setCopiedNotes] = useState(false);
   const saveTimeoutRef = useRef(null);
+  const socketEmitTimeoutRef = useRef(null);
+  const [uploadError, setUploadError] = useState("");
 
   // Resources List State
   const [resources, setResources] = useState(squad.resources || []);
@@ -694,15 +707,25 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
+    };
+  }, []);
+
   const handleNoteChange = (e) => {
     const val = e.target.value;
     setNotes(val);
     setSaveStatus("saving");
-    socket?.emit("notes_update", {
-      squadId: squad.id,
-      notes: val,
-      userName: user?.name || "Student",
-    });
+    if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
+    socketEmitTimeoutRef.current = setTimeout(() => {
+      socket?.emit("notes_update", {
+        squadId: squad.id,
+        notes: val,
+        userName: user?.name || "Student",
+      });
+    }, 300);
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {
       if (user) {
@@ -839,12 +862,13 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
 
       setSelectedFile(null);
       setCustomFileTitle("");
+      setUploadError("");
       setUploadProgress(0);
       setIsUploadingFile(false);
       setShowUploadZone(false);
     } catch (err) {
       console.error("File upload failed:", err);
-      alert(err.response?.data?.error || "Failed to upload file.");
+      setUploadError(err.response?.data?.error || "Failed to upload file. Max size is 30 MB.");
       setIsUploadingFile(false);
       setUploadProgress(0);
     }
@@ -895,7 +919,7 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
             <Presentation className="w-3.5 h-3.5" />
             <span>PDF Slides & Notes</span>
             {slideResources.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-rose-950/60 text-black text-[10px] font-extrabold border border-rose-400/40">
+              <span className="px-1.5 py-0.5 rounded-full bg-black/35 text-white text-[10px] font-extrabold border border-white/25">
                 {slideResources.length}
               </span>
             )}
@@ -1085,6 +1109,13 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
                         <option value="Docs">Reference Docs</option>
                       </select>
                     </div>
+                  </div>
+                )}
+
+                {/* Upload Error Alert */}
+                {uploadError && (
+                  <div className="p-2.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-xs font-medium">
+                    ⚠️ {uploadError}
                   </div>
                 )}
 

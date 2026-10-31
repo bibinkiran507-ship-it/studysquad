@@ -116,17 +116,28 @@ export const AuthProvider = ({ children }) => {
 
   const updateProfile = async (data) => {
     const res = await authAPI.updateMe(data);
-    setUser((prev) => ({ ...prev, ...res.data.user }));
+    setUser((prev) => {
+      const merged = { ...(prev || {}), ...(res.data?.user || {}) };
+      try {
+        localStorage.setItem('studysquad_user', JSON.stringify(merged));
+      } catch {
+        // ignore storage quota errors
+      }
+      return merged;
+    });
     return res.data.user;
   };
 
   const refreshUser = async () => {
     try {
       const res = await authAPI.getMe();
-      setUser(res.data.user);
-      return res.data.user;
+      if (res.data?.user) {
+        saveUserSession(res.data.user);
+      }
+      return res.data?.user || null;
     } catch (err) {
       console.warn('Failed to refresh user profile:', err);
+      return null;
     }
   };
 

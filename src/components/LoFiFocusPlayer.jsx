@@ -9,8 +9,9 @@ const SOUND_MODES = [
     icon: Music,
     color: 'from-purple-500 to-indigo-500',
     type: 'stream',
-    url: 'https://streams.ilovemusic.de/iloveradio17.mp3', // 24/7 Chillhop / Lo-Fi stream
-    desc: 'Relaxing beats to study and relax to',
+    url: 'https://streams.ilovemusic.de/iloveradio17.mp3',
+    fallbackFilterFreq: 550,
+    desc: 'Relaxing beats to study and focus to',
   },
   {
     id: 'rain',
@@ -48,6 +49,7 @@ export default function LoFiFocusPlayer({ className = '' }) {
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [usingSynthFallback, setUsingSynthFallback] = useState(false);
 
   // Audio nodes & references
   const audioElRef = useRef(null);
@@ -68,7 +70,7 @@ export default function LoFiFocusPlayer({ className = '' }) {
       }
     }
     if (audioCtxRef.current?.state === 'suspended') {
-      audioCtxRef.current.resume();
+      audioCtxRef.current.resume().catch(() => {});
     }
     return audioCtxRef.current;
   };
@@ -79,12 +81,14 @@ export default function LoFiFocusPlayer({ className = '' }) {
       try {
         if (node.stop) node.stop();
         if (node.disconnect) node.disconnect();
-      } catch (_) {}
+      } catch {
+        // ignore already stopped nodes
+      }
     });
     synthNodesRef.current = [];
   };
 
-  // Synthesize realistic rain / wind pink noise buffer
+  // Synthesize realistic rain / wind / warm study pink noise buffer
   const startNoiseSynth = (filterFreq) => {
     const ctx = getAudioContext();
     if (!ctx || !gainNodeRef.current) return;
@@ -108,19 +112,19 @@ export default function LoFiFocusPlayer({ className = '' }) {
       b6 = white * 0.115926;
     }
 
-    const whiteNoise = ctx.createBufferSource();
-    whiteNoise.buffer = noiseBuffer;
-    whiteNoise.loop = true;
+    const pinkNoise = ctx.createBufferSource();
+    pinkNoise.buffer = noiseBuffer;
+    pinkNoise.loop = true;
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = filterFreq;
 
-    whiteNoise.connect(filter);
+    pinkNoise.connect(filter);
     filter.connect(gainNodeRef.current);
-    whiteNoise.start();
+    pinkNoise.start();
 
-    synthNodesRef.current.push(whiteNoise, filter);
+    synthNodesRef.current.push(pinkNoise, filter);
   };
 
   // Synthesize binaural beat
@@ -152,29 +156,45 @@ export default function LoFiFocusPlayer({ className = '' }) {
     synthNodesRef.current.push(oscLeft, oscRight, merger, softGain);
   };
 
-  // Start sound according to active mode
-  const playActiveSound = () => {
-    const mode = SOUND_MODES.find((m) => m.id === selectedMode) || SOUND_MODES[0];
+  // Play stream with automatic local synthesizer fallback if campus firewall blocks radio
+  const playMode = (mode) => {
+    if (!mode) return;
+    setUsingSynthFallback(false);
 
     if (mode.type === 'stream') {
       stopSynthesizers();
       if (!audioElRef.current) {
-        audioElRef.current = new Audio(mode.url);
-        audioElRef.current.crossOrigin = 'anonymous';
-      } else {
-        audioElRef.current.src = mode.url;
+        // Intentionally omit crossOrigin='anonymous' so third-party MP3 radio streams play without CORS rejection
+        audioElRef.current = new Audio();
+        audioElRef.current.preload = 'none';
       }
+      audioElRef.current.src = mode.url;
       audioElRef.current.volume = isMuted ? 0 : volume;
+
+      const fallbackToLocalSynth = () => {
+        try {
+          audioElRef.current?.pause();
+        } catch {
+          // ignore
+        }
+        setUsingSynthFallback(true);
+        startNoiseSynth(mode.fallbackFilterFreq || 550);
+      };
+
+      audioElRef.current.onerror = fallbackToLocalSynth;
       audioElRef.current.play().catch((err) => {
-        console.warn('Lo-Fi stream autoplay paused:', err);
+        console.warn('External stream unavailable, activating local ambient synth:', err?.message);
+        fallbackToLocalSynth();
       });
     } else if (mode.type === 'synth-noise') {
       if (audioElRef.current) {
+        audioElRef.current.onerror = null;
         audioElRef.current.pause();
       }
       startNoiseSynth(mode.filterFreq);
     } else if (mode.type === 'binaural') {
       if (audioElRef.current) {
+        audioElRef.current.onerror = null;
         audioElRef.current.pause();
       }
       startBinauralSynth(mode.baseFreq, mode.beatFreq);
@@ -184,9 +204,11 @@ export default function LoFiFocusPlayer({ className = '' }) {
   // Stop everything
   const stopAllSound = () => {
     if (audioElRef.current) {
+      audioElRef.current.onerror = null;
       audioElRef.current.pause();
     }
     stopSynthesizers();
+    setUsingSynthFallback(false);
   };
 
   // Handle play / pause toggle
@@ -196,7 +218,8 @@ export default function LoFiFocusPlayer({ className = '' }) {
       setIsPlaying(false);
     } else {
       setIsPlaying(true);
-      playActiveSound();
+      const mode = SOUND_MODES.find((m) => m.id === selectedMode) || SOUND_MODES[0];
+      playMode(mode);
     }
   };
 
@@ -204,24 +227,8 @@ export default function LoFiFocusPlayer({ className = '' }) {
   const handleSelectMode = (modeId) => {
     setSelectedMode(modeId);
     if (isPlaying) {
-      // Re-trigger with new mode
-      setTimeout(() => {
-        const mode = SOUND_MODES.find((m) => m.id === modeId);
-        if (!mode) return;
-        if (mode.type === 'stream') {
-          stopSynthesizers();
-          if (audioElRef.current) {
-            audioElRef.current.src = mode.url;
-            audioElRef.current.play().catch(() => {});
-          }
-        } else if (mode.type === 'synth-noise') {
-          if (audioElRef.current) audioElRef.current.pause();
-          startNoiseSynth(mode.filterFreq);
-        } else if (mode.type === 'binaural') {
-          if (audioElRef.current) audioElRef.current.pause();
-          startBinauralSynth(mode.baseFreq, mode.beatFreq);
-        }
-      }, 50);
+      const mode = SOUND_MODES.find((m) => m.id === modeId) || SOUND_MODES[0];
+      playMode(mode);
     }
   };
 
@@ -257,7 +264,9 @@ export default function LoFiFocusPlayer({ className = '' }) {
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         try {
           audioCtxRef.current.close();
-        } catch (_) {}
+        } catch {
+          // ignore
+        }
       }
     };
   }, []);
@@ -296,6 +305,11 @@ export default function LoFiFocusPlayer({ className = '' }) {
                   <span className="w-0.5 h-3 bg-purple-400 rounded-full animate-[bounce_1s_infinite_100ms]" />
                   <span className="w-0.5 h-2 bg-purple-300 rounded-full animate-[bounce_1s_infinite_200ms]" />
                   <span className="w-0.5 h-3.5 bg-indigo-400 rounded-full animate-[bounce_1s_infinite_300ms]" />
+                </span>
+              )}
+              {isPlaying && usingSynthFallback && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 border border-purple-400/30">
+                  Local Synth
                 </span>
               )}
             </div>
@@ -396,4 +410,3 @@ export default function LoFiFocusPlayer({ className = '' }) {
     </div>
   );
 }
-

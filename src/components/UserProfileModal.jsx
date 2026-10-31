@@ -1,12 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
   Edit3,
   Save,
-  Timer,
   Users,
-  BookOpen,
   Calendar,
   Shield,
   CheckCircle2,
@@ -20,16 +18,23 @@ import {
   Trophy,
   Flame,
   Crown,
+  Receipt,
+  ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../api/client';
+import { authAPI, aiAPI, paymentAPI } from '../api/client';
 
 export default function UserProfileModal({ onOpenProModal }) {
-  const { user, isProfileOpen, closeProfile, updateProfile, logout, openAuthModal } = useAuth();
+  const { user, isProfileOpen, closeProfile, updateProfile, logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('profile'); // 'profile' | 'security'
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState('');
+
+  // Live AI credit & billing receipt state
+  const [aiUsage, setAiUsage] = useState(null);
+  const [receipts, setReceipts] = useState([]);
 
   // Edit fields
   const [editName, setEditName] = useState(user?.name || '');
@@ -45,28 +50,51 @@ export default function UserProfileModal({ onOpenProModal }) {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [resetStep, setResetStep] = useState('request'); // 'request' | 'confirm'
 
+  useEffect(() => {
+    if (!isProfileOpen || !user) return;
+    setResetEmail(user.email || '');
+    setSaveError('');
+
+    aiAPI
+      .getUsage()
+      .then((res) => setAiUsage(res.data))
+      .catch(() => {});
+
+    paymentAPI
+      .getHistory()
+      .then((res) => {
+        if (Array.isArray(res.data?.orders)) {
+          setReceipts(res.data.orders);
+        }
+      })
+      .catch(() => {});
+  }, [isProfileOpen, user?.id, user?.isPro]);
+
   if (!isProfileOpen || !user) return null;
 
   const handleStartEdit = () => {
     setEditName(user.name || '');
     setEditBio(user.bio || '');
     setEditAvatar(user.avatar || '');
+    setSaveError('');
     setIsEditing(true);
   };
 
   const handleSave = async () => {
     setIsSaving(true);
+    setSaveError('');
     try {
       await updateProfile({
         name: editName.trim(),
         bio: editBio.trim(),
-        avatar: editAvatar.trim() || undefined,
+        avatar: editAvatar.trim() || '',
       });
       setSaveSuccess(true);
       setIsEditing(false);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
       console.error('Profile update error:', err);
+      setSaveError(err.response?.data?.error || 'Could not update profile. Please check your inputs.');
     } finally {
       setIsSaving(false);
     }
@@ -79,11 +107,10 @@ export default function UserProfileModal({ onOpenProModal }) {
     try {
       const res = await authAPI.forgotPassword(resetEmail);
       setResetMessage(res.data.message);
-      // Dev mode: token returned directly
       if (res.data.devResetToken) {
         setResetToken(res.data.devResetToken);
-        setResetStep('confirm');
       }
+      setResetStep('confirm');
     } catch (err) {
       setResetMessage(err.response?.data?.error || 'Something went wrong.');
     } finally {
@@ -139,7 +166,7 @@ export default function UserProfileModal({ onOpenProModal }) {
   ];
 
   const TABS = [
-    { id: 'profile', label: 'Profile' },
+    { id: 'profile', label: 'Profile & Plan' },
     { id: 'security', label: 'Password & Security' },
   ];
 
@@ -198,11 +225,17 @@ export default function UserProfileModal({ onOpenProModal }) {
               </div>
 
               <div className="pb-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-white font-bold text-xl leading-tight">{user.name}</h2>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
-                    <Sparkles size={10} /> Full Access
-                  </span>
+                  {user.isPro ? (
+                    <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-neutral-950 text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                      <Crown size={10} /> Pro Member
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full bg-white/15 text-emerald-200 border border-white/20 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                      Starter Plan
+                    </span>
+                  )}
                 </div>
                 <p className="text-white/60 text-sm flex items-center gap-1 mt-0.5">
                   <Mail size={11} />
@@ -213,7 +246,7 @@ export default function UserProfileModal({ onOpenProModal }) {
           </div>
 
           {/* Stats Row (overlapping banner) */}
-          <div className="mx-6 -mt-8 mb-5 grid grid-cols-3 gap-2 relative z-10">
+          <div className="mx-6 -mt-8 mb-4 grid grid-cols-3 gap-2 relative z-10">
             {stats.map(({ icon: Icon, label, value, color, bg }) => (
               <div
                 key={label}
@@ -226,29 +259,78 @@ export default function UserProfileModal({ onOpenProModal }) {
             ))}
           </div>
 
-          {/* Membership Status Bar */}
-          <div className="px-6 mb-3">
-            <div className="p-3 rounded-2xl flex items-center justify-between border bg-emerald-500/10 border-emerald-500/30">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-emerald-500/20 text-emerald-600">
-                  <Sparkles size={15} />
+          {/* Live Subscription & AI Credit Bar */}
+          <div className="px-6 mb-4">
+            {user.isPro ? (
+              <div className="p-3.5 rounded-2xl flex items-center justify-between gap-3 border bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-50 border-amber-300/70">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br from-amber-400 to-yellow-500 text-neutral-950 shadow-xs">
+                    <Crown size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-extrabold text-neutral-900 flex items-center gap-1.5">
+                      StudySquad Pro ({user.proPlan === 'yearly' ? 'Annual Scholar' : 'Monthly'})
+                    </p>
+                    <p className="text-[11px] text-neutral-600 truncate">
+                      {user.proExpiresAt
+                        ? `Valid until ${new Date(user.proExpiresAt).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })} • Unlimited AI Active`
+                        : 'Unlimited 7-Engine AI & Document Chat Active'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-neutral-900 flex items-center gap-1.5">
-                    StudySquad Full Access
-                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded-full">
-                      Free for All Students
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-neutral-500">
-                    All 7 AI Academic Engines, Document Chat & Study Rooms Unlocked
-                  </p>
-                </div>
+                {onOpenProModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProfile();
+                      onOpenProModal();
+                    }}
+                    className="text-[11px] font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-300/80 border border-amber-400/60 px-3 py-1.5 rounded-xl shrink-0 transition-colors cursor-pointer"
+                  >
+                    Manage
+                  </button>
+                )}
               </div>
-              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/70 border border-emerald-300/60 px-2.5 py-1 rounded-xl">
-                Active
-              </span>
-            </div>
+            ) : (
+              <div className="p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 border bg-neutral-50 border-neutral-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-emerald-500/15 text-emerald-700">
+                    <Sparkles size={16} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-neutral-900 flex items-center gap-1.5">
+                      Free Starter Plan
+                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        {aiUsage && !aiUsage.isPro
+                          ? `${aiUsage.remaining}/${aiUsage.limit} AI Credits Left Today`
+                          : '5 Free AI Credits / Day'}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-neutral-500">
+                      Upgrade to Pro for unlimited AI Tutor, Viva, Quizzes &amp; 30 MB Doc Chat
+                    </p>
+                  </div>
+                </div>
+                {onOpenProModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProfile();
+                      onOpenProModal();
+                    }}
+                    className="inline-flex items-center justify-center gap-1 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-sm transition-all shrink-0 cursor-pointer"
+                  >
+                    <Crown size={13} className="text-amber-300" />
+                    <span>Upgrade • ₹199</span>
+                    <ArrowRight size={12} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Tabs */}
@@ -271,10 +353,9 @@ export default function UserProfileModal({ onOpenProModal }) {
           </div>
 
           {/* Tab Content */}
-          <div className="px-6 pb-6 max-h-[340px] overflow-y-auto">
+          <div className="px-6 pb-6 max-h-[320px] overflow-y-auto">
             {activeTab === 'profile' && (
               <div className="space-y-4">
-                {/* Member Since */}
                 <div className="flex items-center gap-2 text-xs text-neutral-500">
                   <Calendar size={12} />
                   Member since {memberSince}
@@ -331,6 +412,12 @@ export default function UserProfileModal({ onOpenProModal }) {
                       />
                     </div>
 
+                    {saveError && (
+                      <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-3 py-2 text-xs">
+                        {saveError}
+                      </div>
+                    )}
+
                     <div className="flex gap-2 pt-1">
                       <button
                         onClick={() => setIsEditing(false)}
@@ -367,6 +454,38 @@ export default function UserProfileModal({ onOpenProModal }) {
                       </p>
                     </div>
 
+                    {/* Billing Receipts (if any) */}
+                    {receipts.length > 0 && (
+                      <div className="bg-neutral-50 rounded-xl p-3 border border-neutral-200/70">
+                        <p className="text-xs font-semibold text-neutral-600 mb-2 flex items-center gap-1.5">
+                          <Receipt size={12} className="text-emerald-600" />
+                          Payment Receipts ({receipts.length})
+                        </p>
+                        <div className="space-y-1.5 max-h-24 overflow-y-auto">
+                          {receipts.map((order) => (
+                            <div
+                              key={order.id}
+                              className="flex items-center justify-between text-[11px] bg-white px-2.5 py-1.5 rounded-lg border border-neutral-200/70"
+                            >
+                              <span className="font-medium text-neutral-800">
+                                {order.plan === 'yearly' ? 'Annual Pro' : 'Monthly Pro'} •{' '}
+                                <span className="text-neutral-400 font-mono">
+                                  {(order.paymentId || order.orderId || '').slice(-10)}
+                                </span>
+                              </span>
+                              <span className="font-bold text-emerald-700">
+                                ₹{Math.round((order.amount || 0) / 100)} •{' '}
+                                {new Date(order.paidAt || order.createdAt).toLocaleDateString('en-IN', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {saveSuccess && (
                       <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-2 text-sm flex items-center gap-2">
                         <CheckCircle2 size={14} />
@@ -402,7 +521,7 @@ export default function UserProfileModal({ onOpenProModal }) {
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 flex items-start gap-2">
                   <Lock size={14} className="mt-0.5 shrink-0" />
                   <span>
-                    To reset your password, we'll send a reset link to your registered email.
+                    To reset your password, request a reset code to your registered email.
                   </span>
                 </div>
 
@@ -424,7 +543,6 @@ export default function UserProfileModal({ onOpenProModal }) {
                     <div>
                       <label className="block text-xs font-semibold text-neutral-600 mb-1">
                         Reset Token
-                        <span className="font-normal text-neutral-400 ml-1">(from email / dev mode)</span>
                       </label>
                       <input
                         value={resetToken}
@@ -462,7 +580,7 @@ export default function UserProfileModal({ onOpenProModal }) {
                     className={`rounded-xl px-3 py-2 text-sm ${
                       resetMessage.startsWith('✅')
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-rose-50 text-rose-700 border border-rose-200'
+                        : 'bg-emerald-50/70 text-neutral-800 border border-emerald-200'
                     }`}
                   >
                     {resetMessage}
@@ -472,7 +590,10 @@ export default function UserProfileModal({ onOpenProModal }) {
                 <div className="flex gap-2">
                   {resetStep === 'confirm' && (
                     <button
-                      onClick={() => { setResetStep('request'); setResetMessage(''); }}
+                      onClick={() => {
+                        setResetStep('request');
+                        setResetMessage('');
+                      }}
                       className="border border-neutral-200 text-neutral-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-neutral-50 transition-colors cursor-pointer"
                     >
                       Back
@@ -488,7 +609,7 @@ export default function UserProfileModal({ onOpenProModal }) {
                     ) : (
                       <Shield size={14} />
                     )}
-                    {resetStep === 'request' ? 'Send Reset Link' : 'Reset Password'}
+                    {resetStep === 'request' ? 'Send Reset Code' : 'Reset Password'}
                   </button>
                 </div>
               </div>

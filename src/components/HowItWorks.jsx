@@ -29,14 +29,14 @@ export default function HowItWorks() {
       step: 'Step 02',
       title: 'Instant Peer Matching',
       description:
-        'Our algorithm surfaces study groups aligned with your study pace, timezone, and commitment level.',
+        'Our AI matcher surfaces live study squads aligned with your subject, study pace, timezone, and exam goals.',
     },
     {
       icon: Zap,
       step: 'Step 03',
-      title: 'Hop Into Focus Rooms',
+      title: 'Enter Live AI Study Rooms',
       description:
-        'Join live Google Meet/Discord rooms with built-in Pomodoro timers, shared agendas, and peer accountability.',
+        'Study together with built-in in-app video calls, real-time collaborative whiteboards, synchronized Pomodoro streaks, and our 7-engine AI Academic Studio.',
     },
   ]
 

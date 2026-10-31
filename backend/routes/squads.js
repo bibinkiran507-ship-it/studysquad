@@ -2,45 +2,128 @@ import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
+import { fileURLToPath } from 'url';
 import prisma, { withRetry } from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
-
-import { fileURLToPath } from 'url';
+import { extractDocumentText } from '../lib/docExtractor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Setup persistent or local uploads storage for slide decks, lecture notes, and PDFs
-const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads');
+const uploadsDir = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     cb(null, uploadsDir);
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `${baseName}-${uniqueSuffix}${ext}`);
-  }
+    const ext = path.extname(file.originalname).toLowerCase();
+    const baseName = path
+      .basename(file.originalname, path.extname(file.originalname))
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 60);
+    cb(null, `${baseName || 'doc'}-${uniqueSuffix}${ext}`);
+  },
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 30 * 1024 * 1024 }, // 30 MB max
-  fileFilter: (req, file, cb) => {
-    const allowed = ['.pdf', '.ppt', '.pptx', '.doc', '.docx', '.txt', '.png', '.jpg', '.jpeg'];
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      '.pdf',
+      '.ppt',
+      '.pptx',
+      '.doc',
+      '.docx',
+      '.txt',
+      '.md',
+      '.csv',
+      '.png',
+      '.jpg',
+      '.jpeg',
+    ];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Supported formats: PDF, PPT, PPTX, DOC, DOCX, Images, or TXT.'));
+      cb(new Error('Supported formats: PDF, PPT, PPTX, DOC, DOCX, TXT, MD, CSV, or Images.'));
     }
-  }
+  },
 });
+
+// Clean Multer error wrapper returning 400/413 JSON instead of unhandled 500
+const handleFileUpload = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res
+          .status(413)
+          .json({ error: 'File exceeds the 30 MB upload limit. Please compress or split it.' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed.' });
+    }
+    return res.status(400).json({ error: err.message || 'Unsupported file format.' });
+  });
+};
+
+const isSafeOptionalHttpUrl = (val) => {
+  if (!val || typeof val !== 'string' || !val.trim()) return true;
+  try {
+    const parsed = new URL(val.trim());
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
+const isSafeResourceUrl = (val) => {
+  if (!val || typeof val !== 'string' || !val.trim()) return true;
+  const trimmed = val.trim();
+  if (trimmed.startsWith('/uploads/')) return true;
+  return isSafeOptionalHttpUrl(trimmed);
+};
+
+const RESOURCE_PUBLIC_SELECT = {
+  id: true,
+  squadId: true,
+  title: true,
+  url: true,
+  category: true,
+  createdById: true,
+  createdAt: true,
+  createdBy: {
+    select: { id: true, name: true, avatar: true },
+  },
+};
+
+async function checkSquadAccess(squadId, userId) {
+  const squad = await withRetry(() =>
+    prisma.squad.findUnique({
+      where: { id: squadId },
+      select: {
+        id: true,
+        ownerId: true,
+        members: {
+          where: { userId },
+          select: { id: true, role: true },
+        },
+      },
+    })
+  );
+  if (!squad) return { exists: false, allowed: false, isOwner: false };
+  const isOwner = squad.ownerId === userId;
+  const isMember = squad.members.length > 0;
+  return { exists: true, allowed: isOwner || isMember, isOwner };
+}
 
 const router = Router();
 
@@ -48,49 +131,54 @@ const router = Router();
 router.get('/', optionalAuth, async (req, res) => {
   try {
     const { category, search } = req.query;
+    const isPostgres = (process.env.DATABASE_URL || '').startsWith('postgres');
+    const ciMode = isPostgres ? { mode: 'insensitive' } : {};
 
     const where = {};
-    if (category && category !== 'All' && category !== 'All Squads') {
+    if (typeof category === 'string' && category && category !== 'All' && category !== 'All Squads') {
       where.category = category;
     }
-    if (search) {
+    if (typeof search === 'string' && search.trim()) {
+      const q = search.trim();
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { subject: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-        { category: { contains: search, mode: 'insensitive' } },
+        { name: { contains: q, ...ciMode } },
+        { subject: { contains: q, ...ciMode } },
+        { description: { contains: q, ...ciMode } },
+        { category: { contains: q, ...ciMode } },
       ];
     }
 
-    const squads = await prisma.squad.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        owner: {
-          select: { id: true, name: true, avatar: true }
+    const squads = await withRetry(() =>
+      prisma.squad.findMany({
+        where,
+        take: 100,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          owner: {
+            select: { id: true, name: true, avatar: true },
+          },
+          members: {
+            include: {
+              user: {
+                select: { id: true, name: true, avatar: true },
+              },
+            },
+          },
+          tasks: {
+            orderBy: { createdAt: 'asc' },
+          },
+          _count: {
+            select: { members: true, messages: true },
+          },
         },
-        members: {
-          include: {
-            user: {
-              select: { id: true, name: true, avatar: true }
-            }
-          }
-        },
-        tasks: {
-          orderBy: { createdAt: 'asc' }
-        },
-        _count: {
-          select: { members: true, messages: true }
-        }
-      }
-    });
+      })
+    );
 
     const currentUserId = req.user?.id;
 
-    // Transform squads to include memberCount and isJoined for current user
     const formattedSquads = squads.map((squad) => {
       const isJoined = currentUserId
-        ? squad.members.some((m) => m.userId === currentUserId)
+        ? squad.ownerId === currentUserId || squad.members.some((m) => m.userId === currentUserId)
         : false;
 
       return {
@@ -109,7 +197,7 @@ router.get('/', optionalAuth, async (req, res) => {
         members: squad.members.map((m) => m.user),
         tasks: squad.tasks,
         isJoined,
-        createdAt: squad.createdAt
+        createdAt: squad.createdAt,
       };
     });
 
@@ -120,45 +208,43 @@ router.get('/', optionalAuth, async (req, res) => {
   }
 });
 
-// GET /api/squads/:id - Get squad detail
+// GET /api/squads/:id - Get squad detail (returns newest 60 messages in chronological order)
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const squad = await prisma.squad.findUnique({
-      where: { id },
-      include: {
-        owner: {
-          select: { id: true, name: true, avatar: true }
+    const squad = await withRetry(() =>
+      prisma.squad.findUnique({
+        where: { id },
+        include: {
+          owner: {
+            select: { id: true, name: true, avatar: true },
+          },
+          members: {
+            include: {
+              user: {
+                select: { id: true, name: true, avatar: true },
+              },
+            },
+          },
+          tasks: {
+            orderBy: { createdAt: 'asc' },
+          },
+          resources: {
+            orderBy: { createdAt: 'desc' },
+            select: RESOURCE_PUBLIC_SELECT,
+          },
+          messages: {
+            orderBy: { createdAt: 'desc' },
+            take: 60,
+            include: {
+              user: {
+                select: { id: true, name: true, avatar: true },
+              },
+            },
+          },
         },
-        members: {
-          include: {
-            user: {
-              select: { id: true, name: true, avatar: true }
-            }
-          }
-        },
-        tasks: {
-          orderBy: { createdAt: 'asc' }
-        },
-        resources: {
-          orderBy: { createdAt: 'desc' },
-          include: {
-            createdBy: {
-              select: { id: true, name: true, avatar: true }
-            }
-          }
-        },
-        messages: {
-          orderBy: { createdAt: 'asc' },
-          take: 50,
-          include: {
-            user: {
-              select: { id: true, name: true, avatar: true }
-            }
-          }
-        }
-      }
-    });
+      })
+    );
 
     if (!squad) {
       return res.status(404).json({ error: 'Squad not found.' });
@@ -166,18 +252,19 @@ router.get('/:id', optionalAuth, async (req, res) => {
 
     const currentUserId = req.user?.id;
     const isJoined = currentUserId
-      ? squad.members.some((m) => m.userId === currentUserId)
+      ? squad.ownerId === currentUserId || squad.members.some((m) => m.userId === currentUserId)
       : false;
 
     return res.json({
       squad: {
         ...squad,
+        messages: [...(squad.messages || [])].reverse(),
         sharedNotes: squad.sharedNotes || '',
         resources: squad.resources || [],
         memberCount: squad.members.length,
         members: squad.members.map((m) => m.user),
-        isJoined
-      }
+        isJoined,
+      },
     });
   } catch (error) {
     console.error('Fetch squad detail error:', error);
@@ -193,75 +280,105 @@ router.post('/', requireAuth, async (req, res) => {
       category,
       subject,
       description,
-      platform = 'Discord',
+      platform = 'StudySquad Live',
       meetingUrl = '',
-      schedule = 'Mon, Wed, Fri • 8:00 PM EST',
+      schedule = 'Mon, Wed, Fri • 8:00 PM IST',
       maxMembers = 6,
-      bannerGradient
-    } = req.body;
+      bannerGradient,
+    } = req.body || {};
 
-    if (!name || !category || !subject) {
+    if (
+      typeof name !== 'string' ||
+      typeof category !== 'string' ||
+      typeof subject !== 'string' ||
+      !name.trim() ||
+      !category.trim() ||
+      !subject.trim()
+    ) {
       return res.status(400).json({ error: 'Name, category, and subject are required.' });
     }
 
-    // Default gradients if not provided
+    if (!isSafeOptionalHttpUrl(meetingUrl)) {
+      return res.status(400).json({ error: 'Meeting URL must start with https:// or http://.' });
+    }
+
     const gradients = [
       'from-cyan-500/30 to-blue-600/30',
       'from-emerald-500/30 to-teal-600/30',
       'from-purple-500/30 to-pink-600/30',
       'from-amber-500/30 to-orange-600/30',
       'from-indigo-500/30 to-violet-600/30',
-      'from-rose-500/30 to-red-600/30'
+      'from-rose-500/30 to-red-600/30',
     ];
-    const chosenGradient = bannerGradient || gradients[Math.floor(Math.random() * gradients.length)];
+    const chosenGradient =
+      typeof bannerGradient === 'string' && bannerGradient.trim()
+        ? bannerGradient.trim()
+        : gradients[Math.floor(Math.random() * gradients.length)];
 
-    const squad = await prisma.squad.create({
-      data: {
-        name: name.trim(),
-        category: category.trim(),
-        subject: subject.trim(),
-        description: description?.trim() || `Collaborative study squad for ${subject.trim()}.`,
-        platform,
-        meetingUrl: meetingUrl ? meetingUrl.trim() : '',
-        schedule,
-        maxMembers: Number(maxMembers) || 6,
-        bannerGradient: chosenGradient,
-        ownerId: req.user.id,
-        members: {
-          create: {
-            userId: req.user.id
-          }
+    const clampedMax = Math.max(2, Math.min(50, Number(maxMembers) || 6));
+    const cleanName = name.trim().slice(0, 120);
+    const cleanSubject = subject.trim().slice(0, 120);
+
+    const squad = await withRetry(() =>
+      prisma.squad.create({
+        data: {
+          name: cleanName,
+          category: category.trim().slice(0, 80),
+          subject: cleanSubject,
+          description:
+            typeof description === 'string' && description.trim()
+              ? description.trim().slice(0, 1000)
+              : `Collaborative study squad for ${cleanSubject}.`,
+          platform: typeof platform === 'string' && platform.trim() ? platform.trim().slice(0, 60) : 'StudySquad Live',
+          meetingUrl: typeof meetingUrl === 'string' ? meetingUrl.trim() : '',
+          schedule: typeof schedule === 'string' && schedule.trim() ? schedule.trim().slice(0, 120) : 'Flexible Daily Study',
+          maxMembers: clampedMax,
+          bannerGradient: chosenGradient,
+          ownerId: req.user.id,
+          members: {
+            create: {
+              userId: req.user.id,
+              role: 'admin',
+            },
+          },
+          tasks: {
+            create: [
+              {
+                text: `Welcome to ${cleanName}! Introduce yourself in chat`,
+                completed: false,
+                createdById: req.user.id,
+              },
+              {
+                text: `Review upcoming study milestones for ${cleanSubject}`,
+                completed: false,
+                createdById: req.user.id,
+              },
+            ],
+          },
         },
-        // Create initial kick-off tasks
-        tasks: {
-          create: [
-            { text: `Welcome to ${name.trim()}! Introduce yourself in chat`, completed: false, createdById: req.user.id },
-            { text: `Review upcoming study milestones for ${subject.trim()}`, completed: false, createdById: req.user.id }
-          ]
-        }
-      },
-      include: {
-        owner: {
-          select: { id: true, name: true, avatar: true }
+        include: {
+          owner: {
+            select: { id: true, name: true, avatar: true },
+          },
+          members: {
+            include: {
+              user: {
+                select: { id: true, name: true, avatar: true },
+              },
+            },
+          },
+          tasks: true,
         },
-        members: {
-          include: {
-            user: {
-              select: { id: true, name: true, avatar: true }
-            }
-          }
-        },
-        tasks: true
-      }
-    });
+      })
+    );
 
     return res.status(201).json({
       squad: {
         ...squad,
         memberCount: 1,
         members: squad.members.map((m) => m.user),
-        isJoined: true
-      }
+        isJoined: true,
+      },
     });
   } catch (error) {
     console.error('Create squad error:', error);
@@ -269,14 +386,20 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/squads/:id/join - Join a squad
+// POST /api/squads/:id/join - Join a squad (idempotent)
 router.post('/:id/join', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const squad = await prisma.squad.findUnique({
-      where: { id },
-      include: { members: true }
-    });
+    const squad = await withRetry(() =>
+      prisma.squad.findUnique({
+        where: { id },
+        include: {
+          owner: { select: { id: true, name: true, avatar: true } },
+          members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          tasks: true,
+        },
+      })
+    );
 
     if (!squad) {
       return res.status(404).json({ error: 'Squad not found.' });
@@ -284,34 +407,55 @@ router.post('/:id/join', requireAuth, async (req, res) => {
 
     const alreadyJoined = squad.members.some((m) => m.userId === req.user.id);
     if (alreadyJoined) {
-      return res.status(400).json({ error: 'You are already a member of this squad.' });
+      return res.json({
+        message: 'Already a member of this squad.',
+        squad: {
+          ...squad,
+          memberCount: squad.members.length,
+          members: squad.members.map((m) => m.user),
+          isJoined: true,
+        },
+      });
     }
 
-    // Squads are completely open with unlimited capacity - anyone can join!
-    await prisma.squadMember.create({
-      data: {
-        squadId: id,
-        userId: req.user.id
-      }
-    });
+    let newlyAdded = false;
+    try {
+      await withRetry(() =>
+        prisma.squadMember.create({
+          data: {
+            squadId: id,
+            userId: req.user.id,
+            role: squad.ownerId === req.user.id ? 'admin' : 'member',
+          },
+        })
+      );
+      newlyAdded = true;
+    } catch (joinErr) {
+      if (joinErr?.code !== 'P2002') throw joinErr;
+    }
 
-    // Also record a system join message
-    await prisma.message.create({
-      data: {
-        squadId: id,
-        userId: req.user.id,
-        content: `🎉 ${req.user.name} joined the squad!`
-      }
-    });
+    if (newlyAdded) {
+      await withRetry(() =>
+        prisma.message.create({
+          data: {
+            squadId: id,
+            userId: req.user.id,
+            content: `🎉 ${req.user.name} joined the squad!`,
+          },
+        })
+      );
+    }
 
-    const updatedSquad = await prisma.squad.findUnique({
-      where: { id },
-      include: {
-        owner: { select: { id: true, name: true, avatar: true } },
-        members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-        tasks: true
-      }
-    });
+    const updatedSquad = await withRetry(() =>
+      prisma.squad.findUnique({
+        where: { id },
+        include: {
+          owner: { select: { id: true, name: true, avatar: true } },
+          members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          tasks: true,
+        },
+      })
+    );
 
     return res.json({
       message: 'Successfully joined squad!',
@@ -319,8 +463,8 @@ router.post('/:id/join', requireAuth, async (req, res) => {
         ...updatedSquad,
         memberCount: updatedSquad.members.length,
         members: updatedSquad.members.map((m) => m.user),
-        isJoined: true
-      }
+        isJoined: true,
+      },
     });
   } catch (error) {
     console.error('Join squad error:', error);
@@ -332,12 +476,26 @@ router.post('/:id/join', requireAuth, async (req, res) => {
 router.post('/:id/leave', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.squadMember.deleteMany({
-      where: {
-        squadId: id,
-        userId: req.user.id
-      }
-    });
+    const squad = await withRetry(() =>
+      prisma.squad.findUnique({ where: { id }, select: { id: true, ownerId: true } })
+    );
+    if (!squad) {
+      return res.status(404).json({ error: 'Squad not found.' });
+    }
+    if (squad.ownerId === req.user.id) {
+      return res.status(400).json({
+        error: 'As the squad creator, you cannot leave your own squad. You can edit or delete it in Squad Settings.',
+      });
+    }
+
+    await withRetry(() =>
+      prisma.squadMember.deleteMany({
+        where: {
+          squadId: id,
+          userId: req.user.id,
+        },
+      })
+    );
 
     return res.json({ message: 'Successfully left squad.' });
   } catch (error) {
@@ -346,13 +504,13 @@ router.post('/:id/leave', requireAuth, async (req, res) => {
   }
 });
 
-// PATCH /api/squads/:id - Update squad settings (owner only, e.g. meetingUrl, platform, schedule, description)
+// PATCH /api/squads/:id - Update squad settings (owner only)
 router.patch('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { meetingUrl, platform, schedule, description, name } = req.body;
+    const { meetingUrl, platform, schedule, description, name } = req.body || {};
 
-    const squad = await prisma.squad.findUnique({ where: { id } });
+    const squad = await withRetry(() => prisma.squad.findUnique({ where: { id } }));
     if (!squad) {
       return res.status(404).json({ error: 'Squad not found.' });
     }
@@ -361,21 +519,33 @@ router.patch('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only the squad owner can update squad settings.' });
     }
 
-    const updated = await prisma.squad.update({
-      where: { id },
-      data: {
-        ...(typeof meetingUrl === 'string' ? { meetingUrl: meetingUrl.trim() } : {}),
-        ...(platform ? { platform: platform.trim() } : {}),
-        ...(schedule ? { schedule: schedule.trim() } : {}),
-        ...(description ? { description: description.trim() } : {}),
-        ...(name ? { name: name.trim() } : {})
-      },
-      include: {
-        owner: { select: { id: true, name: true, avatar: true } },
-        members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-        tasks: { orderBy: { createdAt: 'asc' } }
-      }
-    });
+    if (meetingUrl !== undefined && !isSafeOptionalHttpUrl(meetingUrl)) {
+      return res.status(400).json({ error: 'Meeting URL must start with https:// or http://.' });
+    }
+
+    const updated = await withRetry(() =>
+      prisma.squad.update({
+        where: { id },
+        data: {
+          ...(typeof meetingUrl === 'string' ? { meetingUrl: meetingUrl.trim() } : {}),
+          ...(typeof platform === 'string' && platform.trim()
+            ? { platform: platform.trim().slice(0, 60) }
+            : {}),
+          ...(typeof schedule === 'string' && schedule.trim()
+            ? { schedule: schedule.trim().slice(0, 120) }
+            : {}),
+          ...(typeof description === 'string' && description.trim()
+            ? { description: description.trim().slice(0, 1000) }
+            : {}),
+          ...(typeof name === 'string' && name.trim() ? { name: name.trim().slice(0, 120) } : {}),
+        },
+        include: {
+          owner: { select: { id: true, name: true, avatar: true } },
+          members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          tasks: { orderBy: { createdAt: 'asc' } },
+        },
+      })
+    );
 
     return res.json({
       message: 'Squad updated successfully.',
@@ -383,8 +553,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
         ...updated,
         memberCount: updated.members.length,
         members: updated.members.map((m) => m.user),
-        isJoined: true
-      }
+        isJoined: true,
+      },
     });
   } catch (error) {
     console.error('Update squad error:', error);
@@ -396,7 +566,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const squad = await prisma.squad.findUnique({ where: { id } });
+    const squad = await withRetry(() => prisma.squad.findUnique({ where: { id } }));
     if (!squad) {
       return res.status(404).json({ error: 'Squad not found.' });
     }
@@ -404,7 +574,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only the squad owner can delete this squad.' });
     }
 
-    await prisma.squad.delete({ where: { id } });
+    await withRetry(() => prisma.squad.delete({ where: { id } }));
     return res.json({ message: 'Squad deleted successfully.' });
   } catch (error) {
     console.error('Delete squad error:', error);
@@ -416,10 +586,12 @@ router.delete('/:id', requireAuth, async (req, res) => {
 router.get('/:id/tasks', async (req, res) => {
   try {
     const { id } = req.params;
-    const tasks = await prisma.task.findMany({
-      where: { squadId: id },
-      orderBy: { createdAt: 'asc' }
-    });
+    const tasks = await withRetry(() =>
+      prisma.task.findMany({
+        where: { squadId: id },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
     return res.json({ tasks });
   } catch (error) {
     console.error('Get tasks error:', error);
@@ -431,20 +603,28 @@ router.get('/:id/tasks', async (req, res) => {
 router.post('/:id/tasks', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { text } = req.body;
+    const { text } = req.body || {};
 
-    if (!text || !text.trim()) {
+    if (typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({ error: 'Task text is required.' });
     }
 
-    const task = await prisma.task.create({
-      data: {
-        squadId: id,
-        text: text.trim(),
-        completed: false,
-        createdById: req.user.id
-      }
-    });
+    const access = await checkSquadAccess(id, req.user.id);
+    if (!access.exists) return res.status(404).json({ error: 'Squad not found.' });
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Join this squad first to add tasks.' });
+    }
+
+    const task = await withRetry(() =>
+      prisma.task.create({
+        data: {
+          squadId: id,
+          text: text.trim().slice(0, 300),
+          completed: false,
+          createdById: req.user.id,
+        },
+      })
+    );
 
     return res.status(201).json({ task });
   } catch (error) {
@@ -456,21 +636,28 @@ router.post('/:id/tasks', requireAuth, async (req, res) => {
 // PATCH /api/squads/:id/tasks/:taskId - Toggle or update task
 router.patch('/:id/tasks/:taskId', requireAuth, async (req, res) => {
   try {
-    const { taskId } = req.params;
-    const { completed, text } = req.body;
+    const { id, taskId } = req.params;
+    const { completed, text } = req.body || {};
 
-    const existing = await prisma.task.findUnique({ where: { id: taskId } });
-    if (!existing) {
-      return res.status(404).json({ error: 'Task not found.' });
+    const existing = await withRetry(() => prisma.task.findUnique({ where: { id: taskId } }));
+    if (!existing || existing.squadId !== id) {
+      return res.status(404).json({ error: 'Task not found in this squad.' });
     }
 
-    const updated = await prisma.task.update({
-      where: { id: taskId },
-      data: {
-        ...(typeof completed === 'boolean' ? { completed } : {}),
-        ...(text ? { text: text.trim() } : {})
-      }
-    });
+    const access = await checkSquadAccess(id, req.user.id);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Join this squad first to update tasks.' });
+    }
+
+    const updated = await withRetry(() =>
+      prisma.task.update({
+        where: { id: taskId },
+        data: {
+          ...(typeof completed === 'boolean' ? { completed } : {}),
+          ...(typeof text === 'string' && text.trim() ? { text: text.trim().slice(0, 300) } : {}),
+        },
+      })
+    );
 
     return res.json({ task: updated });
   } catch (error) {
@@ -483,12 +670,14 @@ router.patch('/:id/tasks/:taskId', requireAuth, async (req, res) => {
 router.delete('/:id/tasks/:taskId', requireAuth, async (req, res) => {
   try {
     const { id, taskId } = req.params;
-    const task = await prisma.task.findUnique({
-      where: { id: taskId },
-      include: { squad: true }
-    });
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
+    const task = await withRetry(() =>
+      prisma.task.findUnique({
+        where: { id: taskId },
+        include: { squad: true },
+      })
+    );
+    if (!task || task.squadId !== id) {
+      return res.status(404).json({ error: 'Task not found in this squad.' });
     }
 
     const isCreator = task.createdById === req.user.id;
@@ -497,7 +686,7 @@ router.delete('/:id/tasks/:taskId', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only task creator or squad owner can delete this task.' });
     }
 
-    await prisma.task.delete({ where: { id: taskId } });
+    await withRetry(() => prisma.task.delete({ where: { id: taskId } }));
     return res.json({ message: 'Task deleted successfully.' });
   } catch (error) {
     console.error('Delete task error:', error);
@@ -509,15 +698,13 @@ router.delete('/:id/tasks/:taskId', requireAuth, async (req, res) => {
 router.get('/:id/resources', async (req, res) => {
   try {
     const { id } = req.params;
-    const resources = await prisma.resource.findMany({
-      where: { squadId: id },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        createdBy: {
-          select: { id: true, name: true, avatar: true }
-        }
-      }
-    });
+    const resources = await withRetry(() =>
+      prisma.resource.findMany({
+        where: { squadId: id },
+        orderBy: { createdAt: 'desc' },
+        select: RESOURCE_PUBLIC_SELECT,
+      })
+    );
     return res.json({ resources });
   } catch (err) {
     console.error('Fetch resources error:', err);
@@ -529,26 +716,34 @@ router.get('/:id/resources', async (req, res) => {
 router.post('/:id/resources', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, url, category = 'Resource' } = req.body;
+    const { title, url = '', category = 'Resource' } = req.body || {};
 
-    if (!title || !title.trim()) {
+    if (typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Title is required.' });
     }
 
-    const resource = await prisma.resource.create({
-      data: {
-        squadId: id,
-        title: title.trim(),
-        url: url ? url.trim() : '',
-        category: category.trim(),
-        createdById: req.user.id
-      },
-      include: {
-        createdBy: {
-          select: { id: true, name: true, avatar: true }
-        }
-      }
-    });
+    if (!isSafeResourceUrl(url)) {
+      return res.status(400).json({ error: 'Resource link must be a valid https:// or http:// URL.' });
+    }
+
+    const access = await checkSquadAccess(id, req.user.id);
+    if (!access.exists) return res.status(404).json({ error: 'Squad not found.' });
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Join this squad first to share resources.' });
+    }
+
+    const resource = await withRetry(() =>
+      prisma.resource.create({
+        data: {
+          squadId: id,
+          title: title.trim().slice(0, 200),
+          url: typeof url === 'string' ? url.trim().slice(0, 2048) : '',
+          category: typeof category === 'string' && category.trim() ? category.trim().slice(0, 40) : 'Resource',
+          createdById: req.user.id,
+        },
+        select: RESOURCE_PUBLIC_SELECT,
+      })
+    );
 
     return res.status(201).json({ resource });
   } catch (err) {
@@ -558,22 +753,25 @@ router.post('/:id/resources', requireAuth, async (req, res) => {
 });
 
 // POST /api/squads/:id/upload - Upload lecture slide deck, notes, or study PDF
-router.post('/:id/upload', requireAuth, upload.single('file'), async (req, res) => {
+router.post('/:id/upload', requireAuth, handleFileUpload, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, category } = req.body;
+    const { title, category } = req.body || {};
 
     if (!req.file) {
       return res.status(400).json({ error: 'Please select a lecture file or PDF to upload.' });
     }
 
-    const squad = await prisma.squad.findUnique({ where: { id } });
-    if (!squad) {
-      return res.status(404).json({ error: 'Squad not found.' });
+    const access = await checkSquadAccess(id, req.user.id);
+    if (!access.exists || !access.allowed) {
+      fs.promises.unlink(req.file.path).catch(() => {});
+      return res
+        .status(access.exists ? 403 : 404)
+        .json({ error: access.exists ? 'Join this squad first to upload files.' : 'Squad not found.' });
     }
 
     const ext = path.extname(req.file.originalname).toLowerCase();
-    let detectedCategory = category;
+    let detectedCategory = typeof category === 'string' ? category.trim() : '';
     if (!detectedCategory) {
       if (ext === '.pdf') detectedCategory = 'PDF';
       else if (ext === '.ppt' || ext === '.pptx') detectedCategory = 'Slides';
@@ -582,41 +780,46 @@ router.post('/:id/upload', requireAuth, upload.single('file'), async (req, res) 
       else detectedCategory = 'Notes';
     }
 
-    // Format human-readable file size (e.g. 2.4 MB or 450 KB)
+    // Extract text from .pptx / .docx / .txt / .md so Document AI Chat works & survives Render redeploys
+    const extractedText = extractDocumentText(req.file.path, ext);
+
     const sizeInMB = (req.file.size / (1024 * 1024)).toFixed(1);
-    const sizeStr = req.file.size < 1024 * 1024 
-      ? `${Math.round(req.file.size / 1024)} KB` 
-      : `${sizeInMB} MB`;
+    const sizeStr =
+      req.file.size < 1024 * 1024
+        ? `${Math.max(1, Math.round(req.file.size / 1024))} KB`
+        : `${sizeInMB} MB`;
 
     const fileUrl = `/uploads/${req.file.filename}`;
-    const cleanTitle = (title && title.trim()) ? title.trim() : req.file.originalname;
+    const cleanTitle =
+      typeof title === 'string' && title.trim()
+        ? title.trim().slice(0, 200)
+        : req.file.originalname.slice(0, 200);
 
-    const resource = await prisma.resource.create({
-      data: {
-        squadId: id,
-        title: cleanTitle,
-        url: fileUrl,
-        category: detectedCategory,
-        createdById: req.user.id
-      },
-      include: {
-        createdBy: {
-          select: { id: true, name: true, avatar: true }
-        }
-      }
-    });
+    const resource = await withRetry(() =>
+      prisma.resource.create({
+        data: {
+          squadId: id,
+          title: cleanTitle,
+          url: fileUrl,
+          category: detectedCategory,
+          extractedText,
+          createdById: req.user.id,
+        },
+        select: RESOURCE_PUBLIC_SELECT,
+      })
+    );
 
     return res.status(201).json({
       message: 'File uploaded successfully!',
       resource: {
         ...resource,
         fileSize: sizeStr,
-        fileName: req.file.originalname
-      }
+        fileName: req.file.originalname,
+      },
     });
   } catch (err) {
     console.error('Upload resource error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to upload lecture file.' });
+    return res.status(500).json({ error: 'Failed to upload lecture file.' });
   }
 });
 
@@ -624,21 +827,34 @@ router.post('/:id/upload', requireAuth, upload.single('file'), async (req, res) 
 router.delete('/:id/resources/:resourceId', requireAuth, async (req, res) => {
   try {
     const { id, resourceId } = req.params;
-    const resource = await prisma.resource.findUnique({
-      where: { id: resourceId },
-      include: { squad: true }
-    });
-    if (!resource) {
-      return res.status(404).json({ error: 'Resource not found.' });
+    const resource = await withRetry(() =>
+      prisma.resource.findUnique({
+        where: { id: resourceId },
+        include: { squad: true },
+      })
+    );
+    if (!resource || resource.squadId !== id) {
+      return res.status(404).json({ error: 'Resource not found in this squad.' });
     }
 
     const isCreator = resource.createdById === req.user.id;
     const isSquadOwner = resource.squad?.ownerId === req.user.id;
     if (!isCreator && !isSquadOwner) {
-      return res.status(403).json({ error: 'Only resource uploader or squad owner can delete this resource.' });
+      return res
+        .status(403)
+        .json({ error: 'Only resource uploader or squad owner can delete this resource.' });
     }
 
-    await prisma.resource.delete({ where: { id: resourceId } });
+    await withRetry(() => prisma.resource.delete({ where: { id: resourceId } }));
+
+    // Clean up local disk upload if present
+    if (resource.url && resource.url.startsWith('/uploads/')) {
+      const candidatePath = path.resolve(uploadsDir, path.basename(resource.url));
+      if (candidatePath.startsWith(uploadsDir)) {
+        fs.promises.unlink(candidatePath).catch(() => {});
+      }
+    }
+
     return res.json({ message: 'Resource deleted successfully.' });
   } catch (err) {
     console.error('Delete resource error:', err);
@@ -650,18 +866,26 @@ router.delete('/:id/resources/:resourceId', requireAuth, async (req, res) => {
 router.patch('/:id/notes', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { notes } = req.body;
+    const { notes } = req.body || {};
 
-    const updated = await prisma.squad.update({
-      where: { id },
-      data: {
-        sharedNotes: typeof notes === 'string' ? notes : ''
-      }
-    });
+    const access = await checkSquadAccess(id, req.user.id);
+    if (!access.exists) return res.status(404).json({ error: 'Squad not found.' });
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Join this squad first to edit shared notes.' });
+    }
+
+    const safeNotes = typeof notes === 'string' ? notes.slice(0, 100_000) : '';
+    const updated = await withRetry(() =>
+      prisma.squad.update({
+        where: { id },
+        data: { sharedNotes: safeNotes },
+        select: { sharedNotes: true },
+      })
+    );
 
     return res.json({
       message: 'Shared notes saved.',
-      sharedNotes: updated.sharedNotes
+      sharedNotes: updated.sharedNotes,
     });
   } catch (err) {
     console.error('Update notes error:', err);
@@ -669,24 +893,27 @@ router.patch('/:id/notes', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/squads/:id/messages - Get chat messages history for a squad
+// GET /api/squads/:id/messages - Get newest chat messages history for a squad in chronological order
 router.get('/:id/messages', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const limit = parseInt(req.query.limit, 10) || 100;
+    const rawLimit = parseInt(req.query.limit, 10) || 100;
+    const limit = Math.max(1, Math.min(200, rawLimit));
 
-    const messages = await withRetry(() => prisma.message.findMany({
-      where: { squadId: id },
-      orderBy: { createdAt: 'asc' },
-      take: limit,
-      include: {
-        user: {
-          select: { id: true, name: true, avatar: true }
-        }
-      }
-    }));
+    const rows = await withRetry(() =>
+      prisma.message.findMany({
+        where: { squadId: id },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        include: {
+          user: {
+            select: { id: true, name: true, avatar: true },
+          },
+        },
+      })
+    );
 
-    return res.json({ messages });
+    return res.json({ messages: rows.reverse() });
   } catch (err) {
     console.error('Fetch messages error:', err);
     return res.status(500).json({ error: 'Failed to fetch messages.' });
@@ -697,24 +924,26 @@ router.get('/:id/messages', optionalAuth, async (req, res) => {
 router.post('/:id/messages', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { content } = req.body;
+    const { content } = req.body || {};
 
-    if (!content || !content.trim()) {
+    if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content is required.' });
     }
 
-    const message = await prisma.message.create({
-      data: {
-        squadId: id,
-        userId: req.user.id,
-        content: content.trim()
-      },
-      include: {
-        user: {
-          select: { id: true, name: true, avatar: true }
-        }
-      }
-    });
+    const message = await withRetry(() =>
+      prisma.message.create({
+        data: {
+          squadId: id,
+          userId: req.user.id,
+          content: content.trim().slice(0, 4000),
+        },
+        include: {
+          user: {
+            select: { id: true, name: true, avatar: true },
+          },
+        },
+      })
+    );
 
     return res.status(201).json({ message });
   } catch (err) {
@@ -727,17 +956,27 @@ router.post('/:id/messages', requireAuth, async (req, res) => {
 router.get('/:id/members', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const members = await prisma.squadMember.findMany({
-      where: { squadId: id },
-      include: {
-        user: {
-          select: { id: true, name: true, avatar: true, bio: true, pomodoroSessions: true, createdAt: true }
-        }
-      },
-      orderBy: { joinedAt: 'asc' }
-    });
-
-    const squad = await prisma.squad.findUnique({ where: { id }, select: { ownerId: true } });
+    const [members, squad] = await withRetry(() =>
+      Promise.all([
+        prisma.squadMember.findMany({
+          where: { squadId: id },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                avatar: true,
+                bio: true,
+                pomodoroSessions: true,
+                createdAt: true,
+              },
+            },
+          },
+          orderBy: { joinedAt: 'asc' },
+        }),
+        prisma.squad.findUnique({ where: { id }, select: { ownerId: true } }),
+      ])
+    );
 
     const formatted = members.map((m) => ({
       ...m.user,
@@ -758,13 +997,14 @@ router.delete('/:id/members/:userId', requireAuth, async (req, res) => {
   try {
     const { id, userId } = req.params;
 
-    const squad = await prisma.squad.findUnique({ where: { id } });
+    const squad = await withRetry(() => prisma.squad.findUnique({ where: { id } }));
     if (!squad) return res.status(404).json({ error: 'Squad not found.' });
 
-    // Check requester is owner or admin
-    const requesterMembership = await prisma.squadMember.findUnique({
-      where: { userId_squadId: { userId: req.user.id, squadId: id } }
-    });
+    const requesterMembership = await withRetry(() =>
+      prisma.squadMember.findUnique({
+        where: { userId_squadId: { userId: req.user.id, squadId: id } },
+      })
+    );
     const isOwner = squad.ownerId === req.user.id;
     const isAdmin = requesterMembership?.role === 'admin';
 
@@ -772,19 +1012,25 @@ router.delete('/:id/members/:userId', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only squad admins can kick members.' });
     }
 
-    // Cannot kick the owner
     if (userId === squad.ownerId) {
       return res.status(400).json({ error: 'Cannot kick the squad owner.' });
     }
 
-    await prisma.squadMember.deleteMany({
-      where: { squadId: id, userId }
-    });
+    await withRetry(() =>
+      prisma.squadMember.deleteMany({
+        where: { squadId: id, userId },
+      })
+    );
 
-    // Record system message
-    await prisma.message.create({
-      data: { squadId: id, userId: req.user.id, content: `🚫 A member was removed from the squad.` }
-    });
+    await withRetry(() =>
+      prisma.message.create({
+        data: {
+          squadId: id,
+          userId: req.user.id,
+          content: `🚫 A member was removed from the squad.`,
+        },
+      })
+    );
 
     return res.json({ message: 'Member removed from squad.' });
   } catch (err) {
@@ -797,23 +1043,25 @@ router.delete('/:id/members/:userId', requireAuth, async (req, res) => {
 router.patch('/:id/members/:userId/role', requireAuth, async (req, res) => {
   try {
     const { id, userId } = req.params;
-    const { role } = req.body; // 'admin' | 'member'
+    const { role } = req.body || {};
 
     if (!['admin', 'member'].includes(role)) {
       return res.status(400).json({ error: 'Role must be "admin" or "member".' });
     }
 
-    const squad = await prisma.squad.findUnique({ where: { id } });
+    const squad = await withRetry(() => prisma.squad.findUnique({ where: { id } }));
     if (!squad) return res.status(404).json({ error: 'Squad not found.' });
 
     if (squad.ownerId !== req.user.id) {
       return res.status(403).json({ error: 'Only the squad owner can change member roles.' });
     }
 
-    await prisma.squadMember.update({
-      where: { userId_squadId: { userId, squadId: id } },
-      data: { role }
-    });
+    await withRetry(() =>
+      prisma.squadMember.update({
+        where: { userId_squadId: { userId, squadId: id } },
+        data: { role },
+      })
+    );
 
     return res.json({ message: `Member role updated to ${role}.` });
   } catch (err) {
@@ -826,14 +1074,16 @@ router.patch('/:id/members/:userId/role', requireAuth, async (req, res) => {
 router.patch('/:id/announcement', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { pinnedMessage } = req.body;
+    const { pinnedMessage } = req.body || {};
 
-    const squad = await prisma.squad.findUnique({ where: { id } });
+    const squad = await withRetry(() => prisma.squad.findUnique({ where: { id } }));
     if (!squad) return res.status(404).json({ error: 'Squad not found.' });
 
-    const membership = await prisma.squadMember.findUnique({
-      where: { userId_squadId: { userId: req.user.id, squadId: id } }
-    });
+    const membership = await withRetry(() =>
+      prisma.squadMember.findUnique({
+        where: { userId_squadId: { userId: req.user.id, squadId: id } },
+      })
+    );
     const isOwner = squad.ownerId === req.user.id;
     const isAdmin = membership?.role === 'admin';
 
@@ -841,10 +1091,16 @@ router.patch('/:id/announcement', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only admins can pin announcements.' });
     }
 
-    const updated = await prisma.squad.update({
-      where: { id },
-      data: { pinnedMessage: pinnedMessage ? pinnedMessage.trim() : '' }
-    });
+    const updated = await withRetry(() =>
+      prisma.squad.update({
+        where: { id },
+        data: {
+          pinnedMessage:
+            typeof pinnedMessage === 'string' ? pinnedMessage.trim().slice(0, 500) : '',
+        },
+        select: { pinnedMessage: true },
+      })
+    );
 
     return res.json({ pinnedMessage: updated.pinnedMessage });
   } catch (err) {
@@ -854,4 +1110,3 @@ router.patch('/:id/announcement', requireAuth, async (req, res) => {
 });
 
 export default router;
-

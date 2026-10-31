@@ -9,7 +9,7 @@
     "dev": "node --watch server.js",
     "prepare:db": "node scripts/prepare-db.js",
     "prisma:generate": "node scripts/prepare-db.js && prisma generate",
-    "prisma:push": "node scripts/prepare-db.js && prisma db push --accept-data-loss",
+    "prisma:push": "node scripts/prepare-db.js && prisma db push",
     "prisma:seed": "node prisma/seed.js",
     "build": "npm run prisma:generate"
   },

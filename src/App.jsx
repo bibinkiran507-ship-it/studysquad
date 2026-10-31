@@ -1,43 +1,70 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, memo } from 'react';
 import { motion } from 'motion/react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
+import { io } from 'socket.io-client';
 import Navbar from './components/Navbar';
 import BackgroundVideo from './components/BackgroundVideo';
 import ServicePills from './components/ServicePills';
 import SquadDirectory from './components/SquadDirectory';
-import SquadRoomModal from './components/SquadRoomModal';
-import CreateSquadModal from './components/CreateSquadModal';
-import StudyCalendarModal from './components/StudyCalendarModal';
-import UpgradeProModal from './components/UpgradeProModal';
 import HowItWorks from './components/HowItWorks';
 import Footer from './components/Footer';
 import ScrollProgress from './components/ScrollProgress';
 import AuthModal from './components/AuthModal';
-import UserProfileModal from './components/UserProfileModal';
-import LoginPage from './components/LoginPage';
 import LegalPolicyModal from './components/LegalPolicyModal';
+import LiveStudyToastContainer from './components/LiveStudyToast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useTypewriter } from './hooks/useTypewriter';
 import { squadsAPI, aiAPI, getSocketUrl } from './api/client';
 import { INITIAL_SQUADS } from './data/mockSquads';
-import { io } from 'socket.io-client';
-import LiveStudyToastContainer from './components/LiveStudyToast';
 
-// ⚠️ Replace this with your real Google OAuth Client ID from Google Cloud Console
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '569756310563-91mpouatvn8ktuarlrfdhh0fjaju9v7m.apps.googleusercontent.com';
+// Code-split heavy modals & full-screen auth view so the homepage loads instantaneously on mobile 4G/5G
+const SquadRoomModal = lazy(() => import('./components/SquadRoomModal'));
+const CreateSquadModal = lazy(() => import('./components/CreateSquadModal'));
+const StudyCalendarModal = lazy(() => import('./components/StudyCalendarModal'));
+const UpgradeProModal = lazy(() => import('./components/UpgradeProModal'));
+const UserProfileModal = lazy(() => import('./components/UserProfileModal'));
+const LoginPage = lazy(() => import('./components/LoginPage'));
+
+const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '569756310563-91mpouatvn8ktuarlrfdhh0fjaju9v7m.apps.googleusercontent.com';
+
+// Isolated memoized typewriter headline so character ticks never re-render the 29 squad cards or modals
+const HeroHeadline = memo(function HeroHeadline() {
+  const { displayed, done } = useTypewriter('find your\nstudy squad!', 38, 600);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6 }}
+      className="mb-6"
+    >
+      <h1 className="text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
+        {displayed}
+        {!done && (
+          <span className="inline-block w-[3px] h-[0.85em] bg-black ml-1.5 align-middle animate-[blink_0.9s_step-start_infinite]" />
+        )}
+      </h1>
+    </motion.div>
+  );
+});
 
 function AppInner() {
-  const { displayed, done } = useTypewriter('find your\nstudy squad!', 38, 600);
-  const { user, openAuthModal } = useAuth();
+  const { user, openAuthModal, isProfileOpen } = useAuth();
+  const userIdRef = useRef(user?.id || null);
+  useEffect(() => {
+    userIdRef.current = user?.id || null;
+  }, [user?.id]);
 
   // State management
   const [squads, setSquads] = useState([]);
-  const [loadingSquads, setLoadingSquads] = useState(true);
+  const [, setLoadingSquads] = useState(true);
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [aiPoweredBy, setAiPoweredBy] = useState('');
   const [globalPresence, setGlobalPresence] = useState({});
   const [liveAlerts, setLiveAlerts] = useState([]);
+  const [sharedSocket, setSharedSocket] = useState(null);
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -54,7 +81,7 @@ function AppInner() {
     return () => window.removeEventListener('studysquad:open-pro-modal', handleTriggerPro);
   }, []);
 
-  // Subscribe to real-time global presence and live study activity alerts
+  // Single shared authenticated Socket.io connection for global presence, live alerts & room collaboration
   useEffect(() => {
     squadsAPI
       .getLivePresence()
@@ -66,10 +93,13 @@ function AppInner() {
       .catch((err) => console.warn('Live presence fetch error:', err.message));
 
     const socketUrl = getSocketUrl();
-
     const socket = io(socketUrl, {
       transports: ['websocket', 'polling'],
+      auth: {
+        token: localStorage.getItem('studysquad_token') || '',
+      },
     });
+    setSharedSocket(socket);
 
     socket.on('global_presence_update', (presenceSummary) => {
       setGlobalPresence(presenceSummary || {});
@@ -77,7 +107,7 @@ function AppInner() {
 
     socket.on('global_user_started_study', (alert) => {
       // Don't show toast to the user who just joined themselves
-      if (user && alert.userId === user.id) return;
+      if (userIdRef.current && alert.userId === userIdRef.current) return;
 
       setLiveAlerts((prev) => {
         if (
@@ -107,8 +137,9 @@ function AppInner() {
 
     return () => {
       socket.disconnect();
+      setSharedSocket(null);
     };
-  }, [user]);
+  }, [user?.id]);
 
   // Request browser notification permission gently on first interaction
   useEffect(() => {
@@ -146,16 +177,18 @@ function AppInner() {
 
   useEffect(() => {
     loadSquads();
-  }, [loadSquads, user]);
+  }, [loadSquads, user?.id]);
 
-  // Handle viral invite links (?joinSquad=xyz or ?squad=xyz)
+  // Handle viral invite links (?joinSquad=xyz or ?squad=xyz) — opens live room preview even for first-time guests
+  const handledInviteRef = useRef(false);
   useEffect(() => {
-    if (squads.length === 0) return;
+    if (handledInviteRef.current || squads.length === 0) return;
     const params = new URLSearchParams(window.location.search);
     const targetSquadId = params.get('joinSquad') || params.get('squad');
     if (targetSquadId) {
       const found = squads.find((s) => s.id === targetSquadId);
       if (found) {
+        handledInviteRef.current = true;
         setActiveSquadRoom(found);
       }
     }
@@ -167,7 +200,6 @@ function AppInner() {
       try {
         const res = await aiAPI.matchSquads(selectedOptions, '');
         if (res.data.matches && res.data.matches.length > 0) {
-          // Merge AI matches with remaining squads
           const matchedIds = new Set(res.data.matches.map((m) => m.id));
           const otherSquads = squads.filter((s) => !matchedIds.has(s.id));
           setSquads([...res.data.matches, ...otherSquads]);
@@ -205,17 +237,18 @@ function AppInner() {
       setActiveSquadRoom(updatedSquad);
     } catch (err) {
       console.error('Failed to join squad:', err);
-      // Fallback local update if API fails
       setSquads((prev) =>
         prev.map((sq) => {
           if (sq.id === squadId) {
             const currentMembers = Array.isArray(sq.members) ? sq.members : [];
-            const currentCount = typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
+            const alreadyIn = currentMembers.some((m) => m.id === user.id);
+            const currentCount =
+              typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
             const updated = {
               ...sq,
               isJoined: true,
-              memberCount: currentCount + 1,
-              members: [...currentMembers, user],
+              memberCount: alreadyIn ? currentCount : currentCount + 1,
+              members: alreadyIn ? currentMembers : [...currentMembers, user],
             };
             setActiveSquadRoom(updated);
             return updated;
@@ -236,7 +269,8 @@ function AppInner() {
           if (sq.id === squadId) {
             const currentMembers = Array.isArray(sq.members) ? sq.members : [];
             const newMembers = currentMembers.filter((m) => m.id !== user.id);
-            const currentCount = typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
+            const currentCount =
+              typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
             return {
               ...sq,
               isJoined: false,
@@ -255,6 +289,11 @@ function AppInner() {
 
   // Toggle study task in a room
   const handleToggleTask = async (squadId, taskId) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
     const squad = squads.find((s) => s.id === squadId);
     const task = squad?.tasks?.find((t) => t.id === taskId);
     const newCompleted = task ? !task.completed : true;
@@ -283,7 +322,6 @@ function AppInner() {
       }));
     }
 
-    // Call API if task has a valid backend ID
     try {
       await squadsAPI.updateTask(squadId, taskId, { completed: newCompleted });
     } catch (err) {
@@ -377,12 +415,23 @@ function AppInner() {
     setLiveAlerts((prev) => prev.filter((a) => a.id !== alertId));
   }, []);
 
-  const handleJoinFromAlert = useCallback((squadId) => {
-    const target = squads.find((s) => s.id === squadId);
-    if (target) {
-      setActiveSquadRoom(target);
-    }
-  }, [squads]);
+  const handleJoinFromAlert = useCallback(
+    (squadId) => {
+      const target = squads.find((s) => s.id === squadId);
+      if (target) {
+        setActiveSquadRoom(target);
+      }
+    },
+    [squads]
+  );
+
+  const isAnyHeavyModalOpen = Boolean(
+    activeSquadRoom ||
+      isCalendarModalOpen ||
+      isProModalOpen ||
+      isCreateModalOpen ||
+      isProfileOpen
+  );
 
   return (
     <div className="relative text-neutral-900 font-sans selection:bg-[#EAECE9] selection:text-[#1C2E1E] antialiased overflow-x-hidden min-h-screen flex flex-col">
@@ -392,20 +441,30 @@ function AppInner() {
       {/* Global Auth Modal */}
       <AuthModal />
 
-      {/* User Profile Modal */}
-      <UserProfileModal onOpenProModal={() => setIsProModalOpen(true)} />
+      {/* Lazy-Loaded User Profile Modal */}
+      {isProfileOpen && (
+        <Suspense fallback={null}>
+          <UserProfileModal onOpenProModal={() => setIsProModalOpen(true)} />
+        </Suspense>
+      )}
 
       {/* Transparent Sticky Navbar */}
       <Navbar
-        onOpenCreateModal={() => setIsCreateModalOpen(true)}
+        onOpenCreateModal={() => {
+          if (!user) {
+            openAuthModal('register');
+            return;
+          }
+          setIsCreateModalOpen(true);
+        }}
         onOpenCalendarModal={() => setIsCalendarModalOpen(true)}
         onOpenProModal={() => setIsProModalOpen(true)}
       />
 
       {/* Hero Section Container */}
       <div className="relative w-full overflow-hidden flex flex-col min-h-screen">
-        {/* Background Video Component - Fixed in background so it never shifts or gets cut off */}
-        <BackgroundVideo />
+        {/* Background Video Component - Auto-paused when full-screen modals or study rooms are active */}
+        <BackgroundVideo paused={isAnyHeavyModalOpen} />
 
         {/* Content Layout Container with safe top clearance */}
         <div className="relative z-10 flex flex-col flex-1 w-full bg-transparent pb-8 min-h-screen">
@@ -414,20 +473,8 @@ function AppInner() {
             className="w-full max-w-7xl mx-auto px-6 pt-20 sm:pt-24 lg:pt-28 pb-10 flex-1 flex flex-col justify-center"
           >
             <div className="max-w-2xl">
-              {/* Headline with Typewriter Hook & Blinking Cursor */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6 }}
-                className="mb-6"
-              >
-                <h1 className="text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-black leading-[1.08] whitespace-pre-line select-none">
-                  {displayed}
-                  {!done && (
-                    <span className="inline-block w-[3px] h-[0.85em] bg-black ml-1.5 align-middle animate-[blink_0.9s_step-start_infinite]" />
-                  )}
-                </h1>
-              </motion.div>
+              {/* Isolated Typewriter Headline */}
+              <HeroHeadline />
 
               {/* Service Pills Prompt & Match Trigger */}
               <motion.div
@@ -447,12 +494,12 @@ function AppInner() {
         </div>
       </div>
 
-      {/* How It Works Section - Transparent background so 3D mannequin remains continuous */}
+      {/* How It Works Section */}
       <div className="relative z-10">
         <HowItWorks />
       </div>
 
-      {/* Squads Directory Section with Live API Data - Transparent background */}
+      {/* Squads Directory Section with Live API Data */}
       <div className="relative z-10">
         <SquadDirectory
           squads={squads}
@@ -466,43 +513,60 @@ function AppInner() {
         />
       </div>
 
-      {/* Footer placed at the very bottom of the page */}
+      {/* Footer */}
       <div className="relative z-10">
         <Footer />
       </div>
 
-      {/* Create Squad Modal */}
-      <CreateSquadModal
-        isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
-        onCreateSquad={handleCreateSquad}
-      />
+      {/* Lazy-Loaded Create Squad Modal */}
+      {isCreateModalOpen && (
+        <Suspense fallback={null}>
+          <CreateSquadModal
+            isOpen={isCreateModalOpen}
+            onClose={() => setIsCreateModalOpen(false)}
+            onCreateSquad={handleCreateSquad}
+          />
+        </Suspense>
+      )}
 
-      {/* Study Session Calendar & Exam Countdown Modal */}
-      <StudyCalendarModal
-        isOpen={isCalendarModalOpen}
-        onClose={() => setIsCalendarModalOpen(false)}
-        squads={squads}
-        onOpenSquadRoom={(squad) => setActiveSquadRoom(squad)}
-      />
+      {/* Lazy-Loaded Study Session Calendar & Exam Countdown Modal */}
+      {isCalendarModalOpen && (
+        <Suspense fallback={null}>
+          <StudyCalendarModal
+            isOpen={isCalendarModalOpen}
+            onClose={() => setIsCalendarModalOpen(false)}
+            squads={squads}
+            onOpenSquadRoom={(squad) => setActiveSquadRoom(squad)}
+          />
+        </Suspense>
+      )}
 
-      {/* StudySquad Pro Upgrade & Payment Modal */}
-      <UpgradeProModal
-        isOpen={isProModalOpen}
-        onClose={() => setIsProModalOpen(false)}
-      />
+      {/* Lazy-Loaded StudySquad Pro Upgrade & Payment Modal */}
+      {isProModalOpen && (
+        <Suspense fallback={null}>
+          <UpgradeProModal
+            isOpen={isProModalOpen}
+            onClose={() => setIsProModalOpen(false)}
+          />
+        </Suspense>
+      )}
 
-      {/* Squad Room Modal with Real-time Chat & Synced Pomodoro */}
-      <SquadRoomModal
-        squad={activeSquadRoom}
-        isOpen={!!activeSquadRoom}
-        onClose={() => setActiveSquadRoom(null)}
-        onToggleTask={handleToggleTask}
-        onAddTask={handleAddTask}
-        globalPresence={globalPresence}
-        onLeaveSquad={handleLeaveSquad}
-        onOpenProModal={() => setIsProModalOpen(true)}
-      />
+      {/* Lazy-Loaded Squad Room Modal with Shared Socket, Live Video, Whiteboard & 7-Engine AI Studio */}
+      {activeSquadRoom && (
+        <Suspense fallback={null}>
+          <SquadRoomModal
+            squad={activeSquadRoom}
+            isOpen={!!activeSquadRoom}
+            onClose={() => setActiveSquadRoom(null)}
+            onToggleTask={handleToggleTask}
+            onAddTask={handleAddTask}
+            globalPresence={globalPresence}
+            onLeaveSquad={handleLeaveSquad}
+            onOpenProModal={() => setIsProModalOpen(true)}
+            sharedSocket={sharedSocket}
+          />
+        </Suspense>
+      )}
 
       {/* Real-time Live Study Activity Toast Notifications */}
       <LiveStudyToastContainer
@@ -516,22 +580,46 @@ function AppInner() {
 
 function AppRoot() {
   const { user, loading } = useAuth();
+  const [showFullLogin, setShowFullLogin] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const p = window.location.pathname.toLowerCase();
+    const hasResetToken = new URLSearchParams(window.location.search).has('resetToken');
+    return p === '/login' || hasResetToken;
+  });
 
-  // While checking auth state, show a minimal dark loader
+  useEffect(() => {
+    const syncRoute = () => {
+      const p = window.location.pathname.toLowerCase();
+      const hasResetToken = new URLSearchParams(window.location.search).has('resetToken');
+      setShowFullLogin(p === '/login' || hasResetToken);
+    };
+    window.addEventListener('popstate', syncRoute);
+    return () => window.removeEventListener('popstate', syncRoute);
+  }, []);
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0a0e0a]">
-        <div className="w-8 h-8 rounded-full border-2 border-emerald-500/30 border-t-emerald-400 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-[#e9ebe6]">
+        <div className="w-8 h-8 rounded-full border-2 border-emerald-600/30 border-t-emerald-600 animate-spin" />
       </div>
     );
   }
 
-  // Not logged in → show full-page login first
-  if (!user) {
-    return <LoginPage />;
+  // Dedicated /login or ?resetToken= view when signed out; otherwise render the live StudySquad homepage for guests, Googlebot & viral invitees!
+  if (!user && showFullLogin) {
+    return (
+      <Suspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center bg-[#e9ebe6]">
+            <div className="w-8 h-8 rounded-full border-2 border-emerald-600/30 border-t-emerald-600 animate-spin" />
+          </div>
+        }
+      >
+        <LoginPage />
+      </Suspense>
+    );
   }
 
-  // Logged in → show the home page
   return <AppInner />;
 }
 

@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Radio, Users, Sparkles, X, ArrowRight, Bell } from 'lucide-react';
+import { Sparkles, X, ArrowRight } from 'lucide-react';
 
 /**
  * Play a subtle, high-frequency pleasant soft chime via Web Audio API.
- * Synthesized locally so no external MP3 dependencies are required.
+ * Synthesized locally so no external MP3 dependencies are required,
+ * and properly closed after playback to avoid leaking hardware AudioContexts.
  */
 function playLiveChime() {
   try {
@@ -12,7 +13,7 @@ function playLiveChime() {
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     if (ctx.state === 'suspended') {
-      ctx.resume();
+      ctx.resume().catch(() => {});
     }
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -30,7 +31,11 @@ function playLiveChime() {
 
     osc.start(ctx.currentTime);
     osc.stop(ctx.currentTime + 0.35);
-  } catch (_) {
+
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 600);
+  } catch {
     // Audio context silently ignored if autoplay policy restricts before gesture
   }
 }
@@ -39,28 +44,24 @@ function playLiveChime() {
  * Live Study Alert Card
  */
 function LiveToastItem({ alert, onDismiss, onJoin }) {
-  const [progress, setProgress] = useState(100);
+  const [animating, setAnimating] = useState(false);
   const DURATION_MS = 6500;
 
   useEffect(() => {
-    // Play subtle soft chime when notification pops up
     playLiveChime();
 
-    const interval = 50;
-    const decrement = (interval / DURATION_MS) * 100;
+    const rafId = requestAnimationFrame(() => {
+      setAnimating(true);
+    });
 
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev <= 0) {
-          clearInterval(timer);
-          onDismiss(alert.id);
-          return 0;
-        }
-        return prev - decrement;
-      });
-    }, interval);
+    const timer = setTimeout(() => {
+      onDismiss(alert.id);
+    }, DURATION_MS);
 
-    return () => clearInterval(timer);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(timer);
+    };
   }, [alert.id, onDismiss]);
 
   return (
@@ -109,7 +110,8 @@ function LiveToastItem({ alert, onDismiss, onJoin }) {
 
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-slate-100 truncate">
-            {alert.userName || 'A teammate'} <span className="font-normal text-slate-400 text-xs">joined</span>
+            {alert.userName || 'A teammate'}{' '}
+            <span className="font-normal text-slate-400 text-xs">joined</span>
           </p>
           <p className="text-xs font-semibold text-cyan-300 truncate mt-0.5">
             {alert.squadName || 'Study Room'}
@@ -139,11 +141,14 @@ function LiveToastItem({ alert, onDismiss, onJoin }) {
         </button>
       </div>
 
-      {/* Auto-dismiss Progress Bar */}
+      {/* Auto-dismiss GPU/CSS Progress Bar (zero 20Hz React re-renders) */}
       <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-800">
         <div
-          className="h-full bg-emerald-400 transition-all duration-75 ease-linear"
-          style={{ width: `${progress}%` }}
+          className="h-full bg-emerald-400 transition-[width] ease-linear"
+          style={{
+            width: animating ? '0%' : '100%',
+            transitionDuration: `${DURATION_MS}ms`,
+          }}
         />
       </div>
     </motion.div>

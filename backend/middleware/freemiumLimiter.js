@@ -1,21 +1,23 @@
 // ─── StudySquad Freemium AI Usage Limiter ────────────────────────────────────
-// Free tier: 5 AI queries per calendar day
+// Free tier: 5 AI queries per calendar day (resets at 12:00 AM IST / UTC+5:30)
 // Pro tier (isPro = true): Unlimited queries
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DAILY_FREE_LIMIT = 5;
+export const DAILY_FREE_LIMIT = 5;
+const PRO_UNLIMITED_NUMERIC = 999999;
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // In-memory daily counter: key = `${userId_or_ip}:${YYYY-MM-DD}` -> count
 const dailyUsageMap = new Map();
 
-// Helper to get today's date key in UTC/IST (YYYY-MM-DD)
-const getTodayKey = () => {
-  const now = new Date();
-  return now.toISOString().slice(0, 10);
+// Helper to get today's date key in IST (YYYY-MM-DD) so Indian students get a midnight reset
+export const getTodayKey = () => {
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  return istNow.toISOString().slice(0, 10);
 };
 
 // Periodically clean up old days from memory every 12 hours
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const today = getTodayKey();
   for (const key of dailyUsageMap.keys()) {
     if (!key.endsWith(today)) {
@@ -24,18 +26,25 @@ setInterval(() => {
   }
 }, 12 * 60 * 60 * 1000);
 
+if (typeof cleanupTimer.unref === 'function') {
+  cleanupTimer.unref();
+}
+
 /**
- * Returns current usage info for a user or IP
+ * Returns current JSON-safe usage info for a user or IP.
+ * Never returns `Infinity` (which JSON.stringify turns into `null`).
  */
 export const getUsageStatus = (user, ip = 'unknown') => {
   const isPro = Boolean(user?.isPro);
   if (isPro) {
     return {
       isPro: true,
-      limit: Infinity,
+      unlimited: true,
+      limit: PRO_UNLIMITED_NUMERIC,
       used: 0,
-      remaining: Infinity,
+      remaining: PRO_UNLIMITED_NUMERIC,
       limitReached: false,
+      resetsAt: 'Never (Pro Unlimited)',
     };
   }
 
@@ -46,15 +55,18 @@ export const getUsageStatus = (user, ip = 'unknown') => {
 
   return {
     isPro: false,
+    unlimited: false,
     limit: DAILY_FREE_LIMIT,
     used,
     remaining,
     limitReached: used >= DAILY_FREE_LIMIT,
+    resetsAt: '12:00 AM IST',
   };
 };
 
 /**
  * Express middleware to enforce daily AI query limit for free users.
+ * Automatically refunds the credit if the downstream route fails (HTTP >= 400).
  */
 export const enforceAiLimit = (req, res, next) => {
   const user = req.user;
@@ -71,17 +83,14 @@ export const enforceAiLimit = (req, res, next) => {
   const todayKey = `${identifier}:${getTodayKey()}`;
   const currentUsed = dailyUsageMap.get(todayKey) || 0;
 
-  // Set rate limit headers
-  res.setHeader('X-Daily-Limit', DAILY_FREE_LIMIT);
-  res.setHeader('X-Daily-Used', currentUsed);
-  res.setHeader('X-Daily-Remaining', Math.max(0, DAILY_FREE_LIMIT - currentUsed));
-
-  // If already at or above limit, block and return upgrade required
   if (currentUsed >= DAILY_FREE_LIMIT) {
+    res.setHeader('X-Daily-Limit', DAILY_FREE_LIMIT);
+    res.setHeader('X-Daily-Used', currentUsed);
+    res.setHeader('X-Daily-Remaining', 0);
     return res.status(403).json({
       error: 'DAILY_AI_LIMIT_REACHED',
       message:
-        "You've crushed your 5 free AI study queries for today! Upgrade to StudySquad Pro for unlimited 24/7 AI exam coaching, document summaries, and mock oral vivas.",
+        "You've used all 5 free AI credits for today! Upgrade to StudySquad Pro (₹199/mo or ₹999/yr) for unlimited 24/7 AI Tutoring, Quiz & Flashcards, Viva Simulator, Document Summaries, and Code Audits.",
       upgradeRequired: true,
       dailyLimit: DAILY_FREE_LIMIT,
       used: currentUsed,
@@ -89,13 +98,24 @@ export const enforceAiLimit = (req, res, next) => {
     });
   }
 
-  // Increment usage on success
-  dailyUsageMap.set(todayKey, currentUsed + 1);
+  // Reserve 1 credit for this request
+  const nextUsed = currentUsed + 1;
+  dailyUsageMap.set(todayKey, nextUsed);
+  res.setHeader('X-Daily-Limit', DAILY_FREE_LIMIT);
+  res.setHeader('X-Daily-Used', nextUsed);
+  res.setHeader('X-Daily-Remaining', Math.max(0, DAILY_FREE_LIMIT - nextUsed));
 
-  // Hook into response to provide remaining count in JSON if desired
-  res.setHeader('X-Daily-Used', currentUsed + 1);
-  res.setHeader('X-Daily-Remaining', Math.max(0, DAILY_FREE_LIMIT - (currentUsed + 1)));
+  // Refund credit automatically if validation fails or server returns an error
+  let refunded = false;
+  res.on('finish', () => {
+    if (!refunded && res.statusCode >= 400) {
+      refunded = true;
+      const latest = dailyUsageMap.get(todayKey) || 0;
+      if (latest > 0) {
+        dailyUsageMap.set(todayKey, latest - 1);
+      }
+    }
+  });
 
-  next();
+  return next();
 };
-

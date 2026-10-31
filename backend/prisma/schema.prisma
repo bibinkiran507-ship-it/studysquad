@@ -51,6 +51,10 @@ model Squad {
   resources       Resource[]
   events          StudyEvent[]
   createdAt       DateTime      @default(now())
+
+  @@index([category, createdAt])
+  @@index([createdAt])
+  @@index([ownerId])
 }
 
 model SquadMember {
@@ -63,6 +67,7 @@ model SquadMember {
   joinedAt DateTime @default(now())
 
   @@unique([userId, squadId])
+  @@index([squadId])
 }
 
 model Task {
@@ -74,6 +79,8 @@ model Task {
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
+
+  @@index([squadId, createdAt])
 }
 
 model Message {
@@ -85,18 +92,24 @@ model Message {
   content    String
   isPinned   Boolean  @default(false)
   createdAt  DateTime @default(now())
+
+  @@index([squadId, createdAt])
+  @@index([userId])
 }
 
 model Resource {
-  id          String   @id @default(uuid())
-  squadId     String
-  squad       Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
-  title       String
-  url         String
-  category    String   @default("Resource")
-  createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  squadId       String
+  squad         Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  title         String
+  url           String
+  category      String   @default("Resource")
+  extractedText String?  @default("")
+  createdById   String?
+  createdBy     User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+
+  @@index([squadId, createdAt])
 }
 
 model PasswordReset {
@@ -107,6 +120,8 @@ model PasswordReset {
   expiresAt DateTime
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  @@index([userId, used])
 }
 
 model StudyEvent {
@@ -126,6 +141,10 @@ model StudyEvent {
   urgency     String    @default("medium") // "low" | "medium" | "high" | "critical"
   isCompleted Boolean   @default(false)
   createdAt   DateTime  @default(now())
+
+  @@index([squadId, date])
+  @@index([userId, date])
+  @@index([date])
 }
 
 model PaymentOrder {
@@ -135,10 +154,16 @@ model PaymentOrder {
   orderId     String    @unique
   paymentId   String?   @default("")
   signature   String?   @default("")
+  receipt     String?   @default("")
   amount      Int       // amount in paise (e.g. 19900 = Rs 199)
   currency    String    @default("INR")
   plan        String    // "monthly" | "yearly"
   status      String    @default("created") // "created" | "paid" | "failed"
+  paidAt      DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([paymentId])
 }

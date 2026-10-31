@@ -40,8 +40,19 @@ import {
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
-import { aiAPI, squadsAPI, eventsAPI, getSocketUrl } from '../api/client';
+import { authAPI, aiAPI, squadsAPI, eventsAPI, getSocketUrl } from '../api/client';
 import LoFiFocusPlayer from './LoFiFocusPlayer';
+
+function isPlaceholderMeetingUrl(url = '') {
+  const trimmed = String(url || '').trim().toLowerCase().replace(/\/+$/, '');
+  if (!trimmed) return true;
+  return (
+    trimmed === 'https://meet.google.com/new' ||
+    trimmed === 'https://meet.new' ||
+    trimmed === 'https://zoom.us/join' ||
+    trimmed === 'https://discord.com'
+  );
+}
 
 // Lazy-load heavy tab components to prevent blocking the main thread
 const Whiteboard   = lazy(() => import('./Whiteboard'));
@@ -90,15 +101,31 @@ export default function SquadRoomModal({
   globalPresence = {},
   onLeaveSquad,
   onOpenProModal,
+  sharedSocket = null,
 }) {
-  const { user, openAuthModal } = useAuth();
+  const { user, openAuthModal, refreshUser } = useAuth();
+  const userRef = useRef(user);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+  const guestFallbackRef = useRef({
+    id: `guest-${Math.random().toString(36).slice(2, 10)}`,
+    name: 'Guest Explorer',
+  });
 
-  // Tab State: 'focus' | 'whiteboard' | 'video' | 'chat' | 'resources'
+  // Tab State: 'focus' | 'whiteboard' | 'video' | 'quiz' | 'chat' | 'resources' | 'schedule' | 'admin'
   const [activeTab, setActiveTab] = useState('focus');
+  const [hasOpenedWhiteboard, setHasOpenedWhiteboard] = useState(false);
+  const [hasOpenedVideo, setHasOpenedVideo] = useState(false);
 
   // Pomodoro State
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
   const [isActive, setIsActive] = useState(false);
+  const secondsLeftRef = useRef(25 * 60);
+  const pomodoroEndRef = useRef(null);
+  useEffect(() => {
+    secondsLeftRef.current = secondsLeft;
+  }, [secondsLeft]);
 
   // Task Input State
   const [newTaskText, setNewTaskText] = useState('');
@@ -200,12 +227,41 @@ export default function SquadRoomModal({
     }
   }, [globalPresence, squad?.id]);
 
+  // Reset persistent Whiteboard / Video tabs whenever modal closes or switches to a different squad
+  useEffect(() => {
+    setHasOpenedWhiteboard(false);
+    setHasOpenedVideo(false);
+    setUnreadCount(0);
+    if (!isOpen) {
+      setActiveTab('focus');
+    }
+  }, [isOpen, squad?.id]);
+
+  // Mark Whiteboard / Video as visited once opened so switching tabs keeps the call & drawings live
+  useEffect(() => {
+    if (!isOpen || !squad?.id) return;
+    if (activeTab === 'whiteboard') setHasOpenedWhiteboard(true);
+    if (activeTab === 'video') setHasOpenedVideo(true);
+  }, [isOpen, squad?.id, activeTab]);
+
+  // Release hardware AudioContext on unmount
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        audioCtxRef.current.close().catch(() => {});
+      }
+      audioCtxRef.current = null;
+    };
+  }, []);
+
   // Sync squad props when modal opens or squad changes
   useEffect(() => {
     if (squad) {
       const url = squad.meetingUrl || squad.link || '';
       setMeetingUrl(url);
       setMeetingInput(url);
+      setAnnouncement(squad.pinnedMessage || '');
+      setAnnouncementInput(squad.pinnedMessage || '');
       if (squad.messages) setMessages(squad.messages);
     }
   }, [squad]);
@@ -238,32 +294,42 @@ export default function SquadRoomModal({
     };
   }, [isOpen, squad?.id]);
 
-  // Initialize Socket.io connection when modal opens (using dynamic environment URL)
+  // Initialize or reuse shared authenticated Socket.io connection when modal opens
   useEffect(() => {
-    if (!isOpen || !squad) return;
+    if (!isOpen || !squad?.id) return undefined;
 
-    const socketUrl = getSocketUrl();
+    const ownsSocket = !sharedSocket;
+    const socketInstance =
+      sharedSocket ||
+      io(getSocketUrl(), {
+        transports: ['websocket', 'polling'],
+        auth: {
+          token: localStorage.getItem('studysquad_token') || '',
+        },
+      });
 
-    const socketInstance = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-    });
     socketRef.current = socketInstance;
     setSocket(socketInstance);
 
-    socketInstance.emit('join_room', {
-      squadId: squad.id,
-      user: user || { id: 'guest-' + Date.now(), name: 'Guest Explorer' },
-      squadName: squad.name,
-      subject: squad.subject,
-    });
+    const emitJoinRoom = () => {
+      socketInstance.emit('join_room', {
+        squadId: squad.id,
+        user: userRef.current || guestFallbackRef.current,
+        squadName: squad.name,
+        subject: squad.subject,
+      });
+    };
+
+    emitJoinRoom();
+    socketInstance.on('connect', emitJoinRoom);
 
     // In-room notification when another classmate joins the session
-    socketInstance.on('user_joined', ({ user: joinedUser }) => {
-      if (joinedUser?.id && joinedUser.id !== user?.id) {
+    const handleUserJoined = ({ user: joinedUser }) => {
+      if (joinedUser?.id && joinedUser.id !== userRef.current?.id) {
         setMessages((prev) => [
           ...prev,
           {
-            id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             userId: 'system',
             user: { name: 'StudySquad Presence' },
             content: `👋 ${joinedUser.name} entered the study room!`,
@@ -272,19 +338,18 @@ export default function SquadRoomModal({
           },
         ]);
       }
-    });
+    };
 
-    socketInstance.on('receive_message', (msg) => {
+    const handleReceiveMessage = (msg) => {
       setMessages((prev) => {
         if (msg.id && prev.some((m) => m.id === msg.id)) {
           return prev;
         }
         // If user is not on the Chat tab, increment unread badge and play chime
-        if (activeTabRef.current !== 'chat' && msg.userId !== user?.id) {
+        if (activeTabRef.current !== 'chat' && msg.userId !== userRef.current?.id) {
           setUnreadCount((c) => c + 1);
-          // Play soft chime via Web Audio API (no external dependencies)
           try {
-            if (!audioCtxRef.current) {
+            if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
               audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
             }
             const ctx = audioCtxRef.current;
@@ -300,40 +365,58 @@ export default function SquadRoomModal({
             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.4);
-          } catch (_) { /* audio not available, silently ignore */ }
+          } catch (_) {
+            /* audio not available, silently ignore */
+          }
         }
         return [...prev, msg];
       });
-    });
+    };
 
     // Live presence: who is currently in this room
-    socketInstance.on('room_presence_update', ({ activeUsers }) => {
+    const handleRoomPresence = ({ activeUsers }) => {
       setLiveUsers(activeUsers || []);
-    });
+    };
 
-    socketInstance.on('pomodoro_sync', ({ action, timeLeft }) => {
+    const handlePomodoroSync = ({ action, timeLeft }) => {
       if (action === 'start') {
+        const nextSecs = typeof timeLeft === 'number' ? timeLeft : secondsLeftRef.current;
+        setSecondsLeft(nextSecs);
+        pomodoroEndRef.current = Date.now() + nextSecs * 1000;
         setIsActive(true);
-        if (typeof timeLeft === 'number') setSecondsLeft(timeLeft);
       } else if (action === 'pause') {
+        pomodoroEndRef.current = null;
         setIsActive(false);
         if (typeof timeLeft === 'number') setSecondsLeft(timeLeft);
       } else if (action === 'reset') {
+        pomodoroEndRef.current = null;
         setIsActive(false);
         setSecondsLeft(25 * 60);
       }
-    });
+    };
+
+    socketInstance.on('user_joined', handleUserJoined);
+    socketInstance.on('receive_message', handleReceiveMessage);
+    socketInstance.on('room_presence_update', handleRoomPresence);
+    socketInstance.on('pomodoro_sync', handlePomodoroSync);
 
     return () => {
+      socketInstance.off('connect', emitJoinRoom);
+      socketInstance.off('user_joined', handleUserJoined);
+      socketInstance.off('receive_message', handleReceiveMessage);
+      socketInstance.off('room_presence_update', handleRoomPresence);
+      socketInstance.off('pomodoro_sync', handlePomodoroSync);
       socketInstance.emit('leave_room', {
         squadId: squad.id,
-        user: user || { name: 'Guest Explorer' },
+        user: userRef.current || guestFallbackRef.current,
       });
-      socketInstance.disconnect();
+      if (ownsSocket) {
+        socketInstance.disconnect();
+      }
       socketRef.current = null;
       setSocket(null);
     };
-  }, [isOpen, squad?.id, user]);
+  }, [isOpen, squad?.id, user?.id, sharedSocket]);
 
   // Keep activeTabRef in sync so the socket handler can read current tab without stale closure
   useEffect(() => {
@@ -347,20 +430,29 @@ export default function SquadRoomModal({
     }
   }, [messages, activeTab]);
 
-  // Pomodoro timer tick logic
+  // Wall-clock Pomodoro timer (zero background-tab drift) + persistent streak recording
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive) return undefined;
+    if (!pomodoroEndRef.current) {
+      pomodoroEndRef.current = Date.now() + secondsLeftRef.current * 1000;
+    }
     const interval = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          setIsActive(false);
-          return 0;
+      if (!pomodoroEndRef.current) return;
+      const remaining = Math.max(0, Math.ceil((pomodoroEndRef.current - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+      if (remaining <= 0) {
+        pomodoroEndRef.current = null;
+        setIsActive(false);
+        if (userRef.current) {
+          authAPI
+            .incrementPomodoro()
+            .then(() => refreshUser?.())
+            .catch(() => {});
         }
-        return s - 1;
-      });
-    }, 1000);
+      }
+    }, 500);
     return () => clearInterval(interval);
-  }, [isActive]);
+  }, [isActive, refreshUser]);
 
   if (!isOpen || !squad) return null;
 
@@ -373,6 +465,7 @@ export default function SquadRoomModal({
   // Pomodoro Actions (broadcast via socket)
   const handleToggleTimer = () => {
     const nextState = !isActive;
+    pomodoroEndRef.current = nextState ? Date.now() + secondsLeft * 1000 : null;
     setIsActive(nextState);
     socketRef.current?.emit('pomodoro_action', {
       squadId: squad.id,
@@ -382,6 +475,7 @@ export default function SquadRoomModal({
   };
 
   const handleResetTimer = () => {
+    pomodoroEndRef.current = null;
     setIsActive(false);
     setSecondsLeft(25 * 60);
     socketRef.current?.emit('pomodoro_action', {
@@ -528,22 +622,26 @@ export default function SquadRoomModal({
         poweredBy: res.data.poweredBy,
       });
     } catch (err) {
-      console.error('AI copilot error:', err);
+      if (err.response?.status === 403) {
+        setAiCopilotResult({
+          title: '👑 Daily Free AI Limit Reached (5/5)',
+          text: 'You have used your 5 free daily AI credits. Upgrade to StudySquad Pro (₹199/month) for unlimited AI summaries, agendas, quizzes, flashcards & tutoring!',
+          poweredBy: 'StudySquad Pro',
+        });
+      } else {
+        console.error('AI copilot error:', err);
+      }
     } finally {
       setIsAiCopilotLoading(false);
     }
   };
 
-  // Copy meeting link to clipboard
+  const rawConfiguredUrl = meetingUrl || squad.link || '';
+  const customMeetingUrl = !isPlaceholderMeetingUrl(rawConfiguredUrl) ? rawConfiguredUrl.trim() : '';
+
+  // Copy meeting link (or direct room invite URL if using built-in call) to clipboard
   const handleCopyLink = () => {
-    const activeUrl =
-      meetingUrl ||
-      squad.link ||
-      (squad.platform === 'Google Meet'
-        ? 'https://meet.google.com/new'
-        : squad.platform === 'Zoom'
-        ? 'https://zoom.us/join'
-        : 'https://discord.com');
+    const activeUrl = customMeetingUrl || `${window.location.origin}/?joinSquad=${squad.id}`;
     navigator.clipboard.writeText(activeUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
@@ -612,7 +710,7 @@ export default function SquadRoomModal({
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              {onLeaveSquad && (
+              {onLeaveSquad && user && !isOwner && (squad.isJoined || membersList.some((m) => m.id === user.id)) && (
                 <button
                   type="button"
                   title="Leave this study squad"
@@ -842,6 +940,31 @@ export default function SquadRoomModal({
 
           {/* Modal Body */}
           <div className="p-6 overflow-y-auto flex-1 space-y-6">
+            {/* Persistent Whiteboard & Video Call containers so switching tabs never drops a live call or erases drawings */}
+            {hasOpenedWhiteboard && (
+              <div className={activeTab === 'whiteboard' ? 'block' : 'hidden'}>
+                <Suspense fallback={<TabLoader />}>
+                  <Whiteboard
+                    socket={socket}
+                    squadId={squad.id}
+                    userName={user?.name || 'Student'}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {hasOpenedVideo && (
+              <div className={activeTab === 'video' ? 'block' : 'hidden'}>
+                <Suspense fallback={<TabLoader />}>
+                  <InRoomVideo
+                    squad={squad}
+                    user={user}
+                    socket={socket}
+                  />
+                </Suspense>
+              </div>
+            )}
+
             <AnimatePresence mode="wait">
               {activeTab === 'focus' && (
                 <TabPanel key="focus">
@@ -853,7 +976,7 @@ export default function SquadRoomModal({
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wide flex items-center gap-1.5">
                           <Video className="w-3.5 h-3.5" />
-                          Live {squad.platform} Session
+                          {customMeetingUrl ? `Live ${squad.platform} Session` : 'Built-In Live Video & Screen Share'}
                         </span>
                         {user && (squad.ownerId === user.id || squad.owner?.id === user.id) && (
                           <button
@@ -862,12 +985,12 @@ export default function SquadRoomModal({
                             className="text-[11px] text-neutral-400 hover:text-white inline-flex items-center gap-1 transition-colors cursor-pointer"
                           >
                             <Edit2 className="w-3 h-3" />
-                            <span>{isEditingMeeting ? 'Cancel' : 'Edit Link'}</span>
+                            <span>{isEditingMeeting ? 'Cancel' : customMeetingUrl ? 'Edit Link' : 'Add Custom Link'}</span>
                           </button>
                         )}
                       </div>
                       <p className="text-sm text-neutral-200 font-mono mt-1 truncate">
-                        {meetingUrl || squad.link || (squad.platform === 'Google Meet' ? 'https://meet.google.com/new (Instant)' : 'No link set yet')}
+                        {customMeetingUrl || 'Instant HD video, audio & screen sharing right inside this study room'}
                       </p>
                     </div>
 
@@ -876,29 +999,32 @@ export default function SquadRoomModal({
                         type="button"
                         onClick={handleCopyLink}
                         className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-neutral-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border border-white/10"
-                        title="Copy meeting link"
+                        title={customMeetingUrl ? 'Copy external meeting link' : 'Copy room invite link'}
                       >
                         {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{copiedLink ? 'Copied!' : 'Copy'}</span>
+                        <span>{copiedLink ? 'Copied!' : customMeetingUrl ? 'Copy Link' : 'Copy Room URL'}</span>
                       </button>
 
-                      <a
-                        href={
-                          meetingUrl ||
-                          squad.link ||
-                          (squad.platform === 'Google Meet'
-                            ? 'https://meet.new'
-                            : squad.platform === 'Zoom'
-                            ? 'https://zoom.us/join'
-                            : 'https://discord.com')
-                        }
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shrink-0 cursor-pointer"
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('video')}
+                        className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shrink-0 cursor-pointer"
                       >
-                        <span>Launch {squad.platform}</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                        <Video className="w-3.5 h-3.5" />
+                        <span>Join Built-In Room Call</span>
+                      </button>
+
+                      {customMeetingUrl && (
+                        <a
+                          href={customMeetingUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/15 px-3 py-2 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer"
+                        >
+                          <span>{squad.platform}</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
                     </div>
                   </div>
 
@@ -1006,10 +1132,10 @@ export default function SquadRoomModal({
                                 </div>
                               </div>
                               {/* Quick action buttons for other users */}
-                              {user && u.id !== user.id && (
-                                <div className="flex items-center gap-1 opacity-0 group-hover/usr:opacity-100 transition-opacity">
+                              {user && u.id !== user.id && u.email && (
+                                <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover/usr:opacity-100 transition-opacity">
                                   <a
-                                    href={`mailto:${u.email || ''}`}
+                                    href={`mailto:${u.email}`}
                                     className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-300 transition-all cursor-pointer"
                                     title={`Message ${u.name}`}
                                   >
@@ -1217,30 +1343,6 @@ export default function SquadRoomModal({
                 </TabPanel>
               )}
 
-              {activeTab === 'whiteboard' && (
-                <TabPanel key="whiteboard">
-                  <Suspense fallback={<TabLoader />}>
-                    <Whiteboard
-                      socket={socket}
-                      squadId={squad.id}
-                      userName={user?.name || 'Student'}
-                    />
-                  </Suspense>
-                </TabPanel>
-              )}
-
-              {activeTab === 'video' && (
-                <TabPanel key="video">
-                  <Suspense fallback={<TabLoader />}>
-                    <InRoomVideo
-                      squad={squad}
-                      user={user}
-                      socket={socket}
-                    />
-                  </Suspense>
-                </TabPanel>
-              )}
-
               {activeTab === 'quiz' && (
                 <TabPanel key="quiz">
                   <Suspense fallback={<TabLoader />}>
@@ -1371,7 +1473,7 @@ export default function SquadRoomModal({
                           <div
                             className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed shadow-md ${
                               isMe
-                                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-black font-medium'
+                                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-medium'
                                 : 'bg-white/10 text-neutral-200 border border-white/10'
                             }`}
                           >
@@ -1384,7 +1486,7 @@ export default function SquadRoomModal({
                               {timeStr && (
                                 <span
                                   className={`text-[9px] ${
-                                    isMe ? 'text-black/60 font-semibold' : 'text-neutral-400'
+                                    isMe ? 'text-emerald-100/80 font-semibold' : 'text-neutral-400'
                                   }`}
                                 >
                                   {timeStr}
@@ -1546,7 +1648,7 @@ export default function SquadRoomModal({
                             </div>
 
                             {!isCurrentUser && !isMemberOwner && (
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                 {/* Promote / Demote */}
                                 <button
                                   type="button"

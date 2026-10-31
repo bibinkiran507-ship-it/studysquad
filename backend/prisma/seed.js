@@ -5,15 +5,17 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Checking database setup for production...');
 
-  // Ensure at least one community host user exists for default squad ownership
-  let user = await prisma.user.findFirst();
+  // Always attach community starter squads to the dedicated StudySquad Community Admin account
+  let user = await prisma.user.findUnique({
+    where: { email: 'admin@studysquad.io' },
+  });
   if (!user) {
     console.log('🌱 Creating default StudySquad Community Admin...');
     user = await prisma.user.create({
       data: {
         name: 'StudySquad Admin',
         email: 'admin@studysquad.io',
-        password: '$2a$10$wY9i1x9qY4Lg.4qF5H8r.eD2zZkM1W1m2V1p4a5b6c7d8e9f0g1h2', // securely hashed dummy
+        password: '$2a$10$wY9i1x9qY4Lg.4qF5H8r.eD2zZkM1W1m2V1p4a5b6c7d8e9f0g1h2',
         avatar: 'https://api.dicebear.com/7.x/adventurer/svg?seed=StudySquadAdmin',
         bio: 'Official StudySquad community space open to all real learners.',
       },
@@ -490,19 +492,37 @@ async function main() {
       },
     ];
 
+    const PLACEHOLDER_URLS = new Set([
+      'https://meet.google.com/new',
+      'https://zoom.us/join',
+      'https://discord.com',
+    ]);
+
     let newlyCreated = 0;
     for (const sq of starterSquads) {
       if (existingSquadNames.has(sq.name)) continue;
 
       const { tasks, ...squadData } = sq;
+      const cleanMeetingUrl = PLACEHOLDER_URLS.has(squadData.meetingUrl) ? '' : squadData.meetingUrl;
       const createdSquad = await prisma.squad.create({
         data: {
           ...squadData,
+          platform: 'StudySquad Live',
+          meetingUrl: cleanMeetingUrl,
           ownerId: user.id,
         },
       });
 
-      // Add default study checklist tasks
+      await prisma.squadMember
+        .create({
+          data: {
+            squadId: createdSquad.id,
+            userId: user.id,
+            role: 'admin',
+          },
+        })
+        .catch(() => {});
+
       for (const t of tasks) {
         await prisma.task.create({
           data: {
@@ -517,21 +537,15 @@ async function main() {
     }
     console.log(`✅ Ensured study squads in database (created ${newlyCreated} missing squads).`);
 
-  // Reassign any orphaned squads to the current user
-  const allUsers = await prisma.user.findMany({ select: { id: true } });
-  const validUserIds = new Set(allUsers.map((u) => u.id));
-  const squads = await prisma.squad.findMany({ select: { id: true, ownerId: true } });
-  const orphanedSquads = squads.filter((s) => !validUserIds.has(s.ownerId));
-
-  if (orphanedSquads.length > 0 && user) {
-    for (const s of orphanedSquads) {
-      await prisma.squad.update({
-        where: { id: s.id },
-        data: { ownerId: user.id },
-      });
-    }
-    console.log(`Reassigned ${orphanedSquads.length} orphaned squads to default admin.`);
-  }
+    // Clean legacy placeholder external URLs on starter squads so built-in InRoomVideo opens cleanly
+    await prisma.squad.updateMany({
+      where: {
+        meetingUrl: { in: Array.from(PLACEHOLDER_URLS) },
+      },
+      data: {
+        meetingUrl: '',
+      },
+    });
 
   console.log('✅ Database is clean, persistent, and ready for public multi-user hosting!');
 }

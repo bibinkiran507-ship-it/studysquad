@@ -3,18 +3,23 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import prisma from '../lib/prisma.js';
+import prisma, { withRetry } from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import { enforceAiLimit, getUsageStatus } from '../middleware/freemiumLimiter.js';
+import { extractDocumentText } from '../lib/docExtractor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = Router();
 
+// Common LaTeX commands starting with JSON escape letters (b, f, n, r, t) that must NOT turn into control chars
+const LATEX_ESCAPE_COLLISION_RE =
+  /(?<!\\)\\(?:frac|forall|beta|binom|begin|bar|mathbf|mathbb|theta|times|tau|text|textbf|textrm|to|triangle|tan|tanh|rightarrow|Rightarrow|rho|rangle|lceil|rfloor|nabla|neq|nu|notin|ni|natural|norm)\b/g;
+
 export const cleanJson = (text) => {
   if (!text) return '';
-  const cleaned = text
+  const cleaned = String(text)
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/, '')
     .replace(/```\s*$/, '')
@@ -24,7 +29,6 @@ export const cleanJson = (text) => {
   const firstBracket = cleaned.indexOf('[');
 
   let extracted = cleaned;
-  // If both exist, determine the outermost container by whichever starts earlier
   if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
     const lastBrace = cleaned.lastIndexOf('}');
     if (lastBrace !== -1 && lastBrace > firstBrace) {
@@ -37,14 +41,32 @@ export const cleanJson = (text) => {
     }
   }
 
-  // Sanitize raw unescaped LaTeX or math backslashes (e.g. \pi, \ge, \in, \alpha, \sum) so JSON.parse never crashes
-  return extracted.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
+  // 1) Escape LaTeX commands colliding with \b, \f, \n, \r, \t (e.g. \frac, \theta, \beta, \nabla, \times)
+  const latexProtected = extracted
+    .replace(LATEX_ESCAPE_COLLISION_RE, (m) => '\\' + m)
+    .replace(/(?<!\\)\\([bf])(?=[a-zA-Z])/g, '\\\\$1');
+
+  // 2) Escape any remaining non-JSON backslashes (e.g. \pi, \alpha, \sum, \sqrt, \ge, \le)
+  return latexProtected.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 };
 
-
+const withTimeout = (promise, ms = 25000) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Gemini request timed out')), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 
 // Helper to initialize Gemini with active model support
-export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
+export const getGeminiModel = (modelName = 'gemini-2.5-flash') => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
@@ -58,19 +80,18 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Resilient multi-model Gemini generator (falls back between active models with auto-retry)
+// Resilient multi-model Gemini generator (valid models + 25s timeout + transient retry)
 export const generateWithGemini = async (contents, options = {}) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
   }
   const candidateModels = [
-    'gemini-flash-lite-latest',
-    'gemini-3.8-flash',
-    'gemini-flash-latest',
+    'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
-    'gemini-pro-latest',
-    'gemini-3.5-flash',
+    'gemini-2.0-flash',
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
   ];
   const genAI = new GoogleGenerativeAI(apiKey.trim());
 
@@ -78,14 +99,17 @@ export const generateWithGemini = async (contents, options = {}) => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const model = genAI.getGenerativeModel({ model: modelName, ...options });
-        const result = await model.generateContent(contents);
+        const result = await withTimeout(model.generateContent(contents), 25000);
         const text = result?.response?.text ? result.response.text() : '';
         if (text) {
           return { text, modelName };
         }
       } catch (err) {
-        // If Google server is experiencing a transient high-demand spike (503) or brief network jitter, pause 400ms and retry
-        if (attempt === 0 && (err.message.includes('503') || err.message.includes('fetch failed') || err.message.includes('ResourceExhausted'))) {
+        const msg = String(err?.message || '');
+        if (
+          attempt === 0 &&
+          (msg.includes('503') || msg.includes('fetch failed') || msg.includes('ResourceExhausted'))
+        ) {
           await new Promise((r) => setTimeout(r, 400));
           continue;
         }
@@ -105,26 +129,31 @@ router.get('/usage', optionalAuth, (req, res) => {
 // POST /api/ai/match - Smart squad matcher
 router.post('/match', async (req, res) => {
   try {
-    const { categories = [], query = '' } = req.body;
+    const rawBody = req.body || {};
+    const categories = Array.isArray(rawBody.categories)
+      ? rawBody.categories.filter((c) => typeof c === 'string').slice(0, 12)
+      : [];
+    const query = typeof rawBody.query === 'string' ? rawBody.query.slice(0, 300) : '';
 
-    // Fetch all squads from database
-    const squads = await prisma.squad.findMany({
-      include: {
-        owner: { select: { id: true, name: true, avatar: true } },
-        members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-        tasks: true
-      }
-    });
+    // Fetch active squads from database (bounded for scale)
+    const squads = await withRetry(() =>
+      prisma.squad.findMany({
+        take: 60,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          owner: { select: { id: true, name: true, avatar: true } },
+          members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          tasks: true,
+        },
+      })
+    );
 
     if (squads.length === 0) {
       return res.json({ matches: [] });
     }
 
-    const model = getGeminiModel();
-
-    if (model) {
-      try {
-        const prompt = `
+    try {
+      const prompt = `
 You are an expert AI Study Squad Matchmaker.
 A student is looking for study partners.
 Student's Selected Interests / Tags: ${JSON.stringify(categories)}
@@ -141,7 +170,7 @@ ${JSON.stringify(
     platform: s.platform,
     schedule: s.schedule,
     currentMembers: s.members.length,
-    maxMembers: s.maxMembers
+    maxMembers: s.maxMembers,
   }))
 )}
 
@@ -157,44 +186,48 @@ Respond ONLY with a valid JSON array in this format:
 No markdown fences, no backticks, only raw JSON.
 `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        const parsed = JSON.parse(cleanJson(text));
+      const geminiRes = await generateWithGemini(prompt);
+      if (geminiRes && geminiRes.text) {
+        const parsed = JSON.parse(cleanJson(geminiRes.text));
+        if (Array.isArray(parsed)) {
+          const matchedSquads = parsed
+            .map((m) => {
+              const squad = squads.find((s) => s.id === m.squadId);
+              if (!squad) return null;
+              return {
+                ...squad,
+                memberCount: squad.members.length,
+                members: squad.members.map((mem) => mem.user),
+                aiMatchScore: m.matchScore,
+                aiMatchReason: m.reason,
+              };
+            })
+            .filter(Boolean);
 
-        const matchedSquads = parsed
-          .map((m) => {
-            const squad = squads.find((s) => s.id === m.squadId);
-            if (!squad) return null;
-            return {
-              ...squad,
-              memberCount: squad.members.length,
-              members: squad.members.map((mem) => mem.user),
-              aiMatchScore: m.matchScore,
-              aiMatchReason: m.reason
-            };
-          })
-          .filter(Boolean);
-
-        if (matchedSquads.length > 0) {
-          return res.json({ matches: matchedSquads, poweredBy: 'Gemini AI' });
+          if (matchedSquads.length > 0) {
+            return res.json({
+              matches: matchedSquads,
+              poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            });
+          }
         }
-      } catch (geminiError) {
-        console.warn('Gemini match failed or returned non-JSON, using heuristic matcher:', geminiError.message);
       }
+    } catch (geminiError) {
+      console.warn('Gemini match fallback triggered:', geminiError.message);
     }
 
-    // Heuristic Fallback Matcher (works reliably without API key)
+    // Heuristic Fallback Matcher
     const scoredSquads = squads.map((squad) => {
       let score = 50;
       const reasons = [];
 
       const squadText = `${squad.name} ${squad.category} ${squad.subject} ${squad.description}`.toLowerCase();
 
-      // Category matching
       if (categories.length > 0) {
-        const catMatched = categories.some((c) =>
-          squad.category.toLowerCase().includes(c.toLowerCase()) ||
-          squadText.includes(c.toLowerCase())
+        const catMatched = categories.some(
+          (c) =>
+            squad.category.toLowerCase().includes(c.toLowerCase()) ||
+            squadText.includes(c.toLowerCase())
         );
         if (catMatched) {
           score += 35;
@@ -202,9 +235,8 @@ No markdown fences, no backticks, only raw JSON.
         }
       }
 
-      // Query matching
       if (query && query.trim()) {
-        const qTerms = query.toLowerCase().split(/\s+/);
+        const qTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
         const termMatches = qTerms.filter((term) => squadText.includes(term));
         if (termMatches.length > 0) {
           score += 15 * termMatches.length;
@@ -212,23 +244,23 @@ No markdown fences, no backticks, only raw JSON.
         }
       }
 
-      // Availability bonus
       if (squad.members.length < squad.maxMembers) {
         score += 10;
         reasons.push(`Active roster with ${squad.maxMembers - squad.members.length} open seats`);
       }
 
       const finalScore = Math.min(Math.max(score, 60), 99);
-      const reason = reasons.length > 0
-        ? reasons.join('. ') + '.'
-        : `Strong study track for ${squad.subject} with balanced peer momentum.`;
+      const reason =
+        reasons.length > 0
+          ? reasons.join('. ') + '.'
+          : `Strong study track for ${squad.subject} with balanced peer momentum.`;
 
       return {
         ...squad,
         memberCount: squad.members.length,
         members: squad.members.map((mem) => mem.user),
         aiMatchScore: finalScore,
-        aiMatchReason: reason
+        aiMatchReason: reason,
       };
     });
 
@@ -236,7 +268,7 @@ No markdown fences, no backticks, only raw JSON.
 
     return res.json({
       matches: scoredSquads.slice(0, 6),
-      poweredBy: model ? 'Gemini AI' : 'Smart Heuristics (Add GEMINI_API_KEY for deep LLM analysis)'
+      poweredBy: 'StudySquad Smart Engine',
     });
   } catch (error) {
     console.error('AI match error:', error);
@@ -245,14 +277,12 @@ No markdown fences, no backticks, only raw JSON.
 });
 
 // POST /api/ai/suggest-goals - Generate study goals for a squad
-router.post('/suggest-goals', async (req, res) => {
+router.post('/suggest-goals', optionalAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { squadName, subject, category } = req.body;
-    const model = getGeminiModel();
+    const { squadName = '', subject = '', category = '' } = req.body || {};
 
-    if (model) {
-      try {
-        const prompt = `
+    try {
+      const prompt = `
 You are an expert academic coach and study planner.
 Generate 3 concrete, highly actionable study goals/tasks for a study squad with:
 - Squad Name: "${squadName}"
@@ -263,13 +293,18 @@ Return ONLY a JSON array of 3 string items.
 Example: ["Solve 3 medium DP problems on LeetCode", "Complete mock interview on Graph traversal", "Review time complexity cheat sheet"]
 No extra text or backticks.
 `;
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        const goals = JSON.parse(cleanJson(text));
-        return res.json({ goals, poweredBy: 'Gemini AI' });
-      } catch (err) {
-        console.warn('Gemini goal suggestion failed, falling back:', err.message);
+      const geminiRes = await generateWithGemini(prompt);
+      if (geminiRes && geminiRes.text) {
+        const goals = JSON.parse(cleanJson(geminiRes.text));
+        if (Array.isArray(goals) && goals.length > 0) {
+          return res.json({
+            goals,
+            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+          });
+        }
       }
+    } catch (err) {
+      console.warn('Gemini goal suggestion fallback triggered:', err.message);
     }
 
     // Heuristic Fallback Goals based on subject & curriculum
@@ -435,13 +470,15 @@ No extra text or backticks.
 // POST /api/ai/generate-flashcards - Generate active recall flashcards
 router.post('/generate-flashcards', requireAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { subject = '', category = '', topic = '', notes = '' } = req.body;
-    const model = getGeminiModel();
-    const sourceContext = (notes && notes.trim().length > 15) ? notes.trim().slice(0, 1500) : (topic || subject || category || 'General Knowledge');
+    const { subject = '', category = '', topic = '', notes = '' } = req.body || {};
+    const cleanNotes = typeof notes === 'string' ? notes.trim() : '';
+    const sourceContext =
+      cleanNotes.length > 15
+        ? cleanNotes.slice(0, 1500)
+        : topic || subject || category || 'General Knowledge';
 
-    if (model) {
-      try {
-        const prompt = `
+    try {
+      const prompt = `
 You are an expert academic coach and spaced repetition tutor.
 Create 6 high-yield, engaging study flashcards for active recall.
 Subject: "${subject}"
@@ -464,15 +501,18 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        const cards = JSON.parse(cleanJson(text));
+      const geminiRes = await generateWithGemini(prompt);
+      if (geminiRes && geminiRes.text) {
+        const cards = JSON.parse(cleanJson(geminiRes.text));
         if (Array.isArray(cards) && cards.length > 0) {
-          return res.json({ flashcards: cards, poweredBy: 'Gemini AI' });
+          return res.json({
+            flashcards: cards,
+            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+          });
         }
-      } catch (geminiErr) {
-        console.warn('Gemini flashcard generation failed, using curated deck:', geminiErr.message);
       }
+    } catch (geminiErr) {
+      console.warn('Gemini flashcard generation fallback triggered:', geminiErr.message);
     }
 
     // Curated High-Yield Fallback Flashcards
@@ -598,7 +638,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 
     return res.json({
       flashcards: fallbackDeck,
-      poweredBy: model ? 'Gemini AI' : 'Curated Study Engine'
+      poweredBy: 'StudySquad Smart Engine',
     });
   } catch (error) {
     console.error('Generate flashcards error:', error);
@@ -609,13 +649,15 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 // POST /api/ai/generate-quiz - Generate active recall multiple-choice quiz
 router.post('/generate-quiz', requireAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { subject = '', category = '', topic = '', notes = '' } = req.body;
-    const model = getGeminiModel();
-    const sourceContext = (notes && notes.trim().length > 15) ? notes.trim().slice(0, 1500) : (topic || subject || category || 'General Knowledge');
+    const { subject = '', category = '', topic = '', notes = '' } = req.body || {};
+    const cleanNotes = typeof notes === 'string' ? notes.trim() : '';
+    const sourceContext =
+      cleanNotes.length > 15
+        ? cleanNotes.slice(0, 1500)
+        : topic || subject || category || 'General Knowledge';
 
-    if (model) {
-      try {
-        const prompt = `
+    try {
+      const prompt = `
 You are an expert exam creator and professor.
 Create a 5-question multiple choice practice quiz for students studying:
 Subject: "${subject}"
@@ -640,15 +682,19 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        const quiz = JSON.parse(cleanJson(text));
+      const geminiRes = await generateWithGemini(prompt);
+      if (geminiRes && geminiRes.text) {
+        const quiz = JSON.parse(cleanJson(geminiRes.text));
         if (Array.isArray(quiz) && quiz.length > 0) {
-          return res.json({ quiz, questions: quiz, poweredBy: 'Gemini AI' });
+          return res.json({
+            quiz,
+            questions: quiz,
+            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+          });
         }
-      } catch (geminiErr) {
-        console.warn('Gemini quiz generation failed, using curated quiz:', geminiErr.message);
       }
+    } catch (geminiErr) {
+      console.warn('Gemini quiz generation fallback triggered:', geminiErr.message);
     }
 
     // Curated Fallback Quiz
@@ -801,7 +847,8 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 
     return res.json({
       quiz: fallbackQuiz,
-      poweredBy: model ? 'Gemini AI' : 'Curated Study Engine'
+      questions: fallbackQuiz,
+      poweredBy: 'StudySquad Smart Engine',
     });
   } catch (error) {
     console.error('Generate quiz error:', error);
@@ -813,15 +860,24 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 router.post('/squad-bot', optionalAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
-      squadId,
       query = '',
       context = {},
       history = [],
       mode = 'chat', // 'chat' | 'summarize-notes' | 'study-agenda'
-      image = null // optional base64 data URL from pasted screenshot
-    } = req.body;
+      image = null, // optional base64 data URL from pasted screenshot
+    } = req.body || {};
 
-    const { subject = '', category = '', squadName = '', sharedNotes = '', tasks = [] } = context;
+    const safeQuery = typeof query === 'string' ? query.slice(0, 4000) : '';
+    const safeContext = context && typeof context === 'object' ? context : {};
+    const {
+      subject = '',
+      category = '',
+      squadName = '',
+      sharedNotes = '',
+      tasks = [],
+    } = safeContext;
+    const safeTasks = Array.isArray(tasks) ? tasks : [];
+    const safeNotes = typeof sharedNotes === 'string' ? sharedNotes : '';
 
     let prompt = '';
     if (mode === 'summarize-notes') {
@@ -829,7 +885,7 @@ router.post('/squad-bot', optionalAuth, enforceAiLimit, async (req, res) => {
 The squad is studying ${subject || 'General Studies'} (${category || 'Academics'}).
 Here are their collaborative shared study notes:
 """
-${(sharedNotes || '').slice(0, 4000) || 'No notes written yet.'}
+${safeNotes.slice(0, 4000) || 'No notes written yet.'}
 """
 
 Please provide a concise, high-yield summary of these study notes:
@@ -840,7 +896,7 @@ Format cleanly with Markdown bullet points and bold headers.`;
     } else if (mode === 'study-agenda') {
       prompt = `You are StudySquad AI, an academic study coach.
 The squad "${squadName || 'Study'}" is preparing for a collaborative focus session on ${subject || 'their coursework'} (${category || 'Academics'}).
-Current squad study goals/tasks: ${JSON.stringify(tasks.map((t) => t.text || t))}
+Current squad study goals/tasks: ${JSON.stringify(safeTasks.map((t) => t?.text || t))}
 
 Generate an inspiring, high-yield 60-Minute Study Session Agenda:
 - 00-05m: Quick check-in & goal alignment
@@ -850,17 +906,25 @@ Generate an inspiring, high-yield 60-Minute Study Session Agenda:
 - 55-60m: Wrap-up & milestone checklist
 Tailor the specific tasks and topics to ${subject}. Format clearly with Markdown.`;
     } else {
-      const historySnippet = Array.isArray(history) && history.length > 0
-        ? `Conversation History:\n${history.slice(-8).map((m) => `${m.sender === 'user' ? 'Student' : 'Tutor'}: ${m.text}`).join('\n')}\n\n`
-        : '';
+      const historySnippet =
+        Array.isArray(history) && history.length > 0
+          ? `Conversation History:\n${history
+              .slice(-8)
+              .map((m) => `${m?.sender === 'user' ? 'Student' : 'Tutor'}: ${String(m?.text || '').slice(0, 800)}`)
+              .join('\n')}\n\n`
+          : '';
 
-      const effectiveQuery = query || (image ? 'Please analyze this screenshot/image and explain the solution, answer, or concepts step-by-step.' : '');
+      const effectiveQuery =
+        safeQuery ||
+        (image
+          ? 'Please analyze this screenshot/image and explain the solution, answer, or concepts step-by-step.'
+          : '');
 
       prompt = `You are a warm, brilliant, patient, and knowledgeable human tutor chatting 1-on-1 with a student in their study space.
 You can answer ANY question the student asks across ALL domains: coding, algorithms, mathematics, science, history, general knowledge, language, logic, creative writing, exam prep, or friendly casual conversation.
 Study Context (use as reference if their question relates to it): "${squadName || 'StudySquad'}" • Subject: "${subject || 'General Studies'}" (${category || 'Academics'}).
 
-${sharedNotes ? `Relevant notes from squad session:\n"""\n${sharedNotes.slice(0, 800)}\n"""\n\n` : ''}${historySnippet}Student: "${effectiveQuery}"
+${safeNotes ? `Relevant notes from squad session:\n"""\n${safeNotes.slice(0, 800)}\n"""\n\n` : ''}${historySnippet}Student: "${effectiveQuery}"
 
 Guidelines for your response:
 1. **Answer whatever the student asks directly**: Whether it is a deep algorithmic breakdown, a quick math equation, a conceptual explanation, a code review, or casual dialogue, answer thoroughly, accurately, and immediately without deflection.
@@ -872,17 +936,20 @@ Guidelines for your response:
 
     try {
       let contents = prompt;
-      if (image && typeof image === 'string' && image.startsWith('data:image/')) {
+      if (
+        image &&
+        typeof image === 'string' &&
+        image.startsWith('data:image/') &&
+        image.length <= 5_500_000
+      ) {
         const matches = image.match(/^data:(image\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
         if (matches) {
-          const mimeType = matches[1];
-          const data = matches[2];
           contents = [
             prompt,
             {
               inlineData: {
-                mimeType,
-                data,
+                mimeType: matches[1],
+                data: matches[2],
               },
             },
           ];
@@ -899,54 +966,54 @@ Guidelines for your response:
         return res.json({
           response: geminiResult.text,
           poweredBy: `Google Gemini (${geminiResult.modelName})`,
-          mode
+          mode,
         });
       }
     } catch (geminiErr) {
       console.warn('Gemini squad-bot call error, falling back:', geminiErr.message);
     }
 
-    // Heuristic Fallback if Gemini key is missing
+    // Polished student-facing fallback
     let fallbackText = '';
     if (mode === 'summarize-notes') {
-      if (!sharedNotes || sharedNotes.trim().length < 10) {
-        fallbackText = `📝 **Squad Notes Summary**\n\nYour squad hasn't added notes in the Resources tab yet! Open the **Resources & Notes** tab and type your lecture notes or code snippets, then click **Summarize Notes** again.\n\n*(Tip: Add your free Google Gemini API key to backend/.env to unlock live AI note synthesis!)*`;
+      if (!safeNotes || safeNotes.trim().length < 10) {
+        fallbackText = `📝 **Squad Notes Summary**\n\nYour squad hasn't added notes in the **Resources & Notes** tab yet! Open **Resources & Notes**, jot down your lecture takeaways or formulas, and click **Summarize Notes** again.`;
       } else {
-        fallbackText = `📝 **Squad Notes Key Takeaways** (${subject || 'Study'})\n\n` +
+        fallbackText =
+          `📝 **Squad Notes Key Takeaways** (${subject || 'Study'})\n\n` +
           `• **Primary Theme**: Focuses on core principles of ${subject || 'your subject'}.\n` +
-          `• **Notes Length**: ~${sharedNotes.split(/\s+/).length} words recorded by squad peers.\n` +
-          `• **Study Tip**: Review key definitions before starting problem sets and test each other in Squad Chat.\n\n` +
-          `*(Connect your Google Gemini API key in backend/.env for full automated bullet extraction and equation summarization!)*`;
+          `• **Notes Length**: ~${safeNotes.trim().split(/\s+/).length} words recorded by squad peers.\n` +
+          `• **Study Tip**: Review key definitions before starting problem sets and test each other in Squad Chat.`;
       }
     } else if (mode === 'study-agenda') {
-      fallbackText = `📅 **Recommended 60-Minute Study Agenda for ${subject || squadName}**\n\n` +
+      fallbackText =
+        `📅 **Recommended 60-Minute Study Agenda for ${subject || squadName || 'Your Session'}**\n\n` +
         `• **00:00 - 05:00** 🚀 *Kickoff*: Check off prior tasks and set goals for today's 25-minute sprint.\n` +
         `• **05:00 - 30:00** 🔥 *Pomodoro Sprint 1*: Solo or paired deep focus on core theory & definitions.\n` +
         `• **30:00 - 35:00** ☕ *Short Break*: Hydrate and compare notes in Squad Chat.\n` +
         `• **35:00 - 55:00** ✏️ *Pomodoro Sprint 2*: Practice problems & Whiteboard derivations.\n` +
-        `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!\n\n` +
-        `*(Connect your Google Gemini API key in backend/.env for AI-customized agendas tailored to your live tasks!)*`;
+        `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!`;
     } else if (image) {
-      fallbackText = `📸 **Screenshot Received!**\n\nI can see you attached an image or screenshot! To enable real-time visual OCR and diagram analysis with Google Gemini Multimodal Vision, ensure your free **GEMINI_API_KEY** is configured in \`backend/.env\`.\n\n*(Gemini Flash analyzes code screenshots, handwritten formulas, and diagrams with high precision!)*`;
+      fallbackText = `📸 **Screenshot Received!**\n\nOur visual AI engine is momentarily busy experiencing high student traffic. Please try sending your screenshot again in a few seconds, or type out the equation/question text so I can solve it right away!`;
     } else {
-      const qLower = query.toLowerCase();
+      const qLower = safeQuery.toLowerCase();
       let answerBody = `Great question! When studying **${subject || 'this topic'}**, focus on building an intuitive mental model first before diving into memorization. Try explaining the mechanism in your own words to a squad partner on the Whiteboard.`;
 
       if (qLower.includes('complexity') || qLower.includes('time') || qLower.includes('space')) {
-        answerBody = `In algorithm analysis, **Time Complexity** measures operations relative to input size n, while **Space Complexity** measures auxiliary memory. Standard best practices recommend aiming for O(1) auxiliary space and O(n) or O(n log n) time whenever feasible.`;
+        answerBody = `In algorithm analysis, **Time Complexity** measures operations relative to input size \`n\`, while **Space Complexity** measures auxiliary memory. Aim for \`O(1)\` auxiliary space and \`O(n)\` or \`O(n log n)\` time whenever feasible.`;
       } else if (qLower.includes('pomodoro') || qLower.includes('focus') || qLower.includes('productivity')) {
-        answerBody = `The **Pomodoro Technique** enforces 25 minutes of mono-tasking followed by a 5-minute cognitive reset. Research shows this rhythm preserves dopamine, staves off decision fatigue, and improves long-term recall.`;
+        answerBody = `The **Pomodoro Technique** enforces 25 minutes of mono-tasking followed by a 5-minute cognitive reset. Research shows this rhythm preserves focus, reduces fatigue, and improves long-term recall.`;
       } else if (qLower.includes('test') || qLower.includes('exam') || qLower.includes('quiz')) {
-        answerBody = `For exam prep, **Active Recall** (testing yourself without looking at notes) and **Spaced Repetition** are scientifically proven to be 2-3x more effective than passive highlighting. Try generating flashcards in the **AI Quiz & Cards** tab!`;
+        answerBody = `For exam prep, **Active Recall** (testing yourself without looking at notes) and **Spaced Repetition** are scientifically proven to be 2–3× more effective than passive highlighting. Try generating flashcards in the **Quiz & Cards** tab!`;
       }
 
-      fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Pro-tip*: You can tag \`@ai\` directly in Squad Chat anytime to ask questions!\n\n*(Note: Powered by StudySquad Academic Heuristics. Add your free GEMINI_API_KEY in backend/.env for real-time generative responses!)*`;
+      fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Tip*: You can also tag \`@ai\` directly in Squad Chat anytime!`;
     }
 
     return res.json({
       response: fallbackText,
-      poweredBy: 'StudySquad Academic Engine',
-      mode
+      poweredBy: 'StudySquad Smart Engine',
+      mode,
     });
   } catch (error) {
     console.error('Squad bot error:', error);
@@ -954,7 +1021,7 @@ Guidelines for your response:
   }
 });
 
-// POST /api/ai/chat-doc - Chat with uploaded Lecture PDF, Slides, or Notes
+// POST /api/ai/chat-doc - Chat with uploaded Lecture PDF, PPTX/DOCX Slides, Images, or Notes
 router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
@@ -962,43 +1029,98 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       resourceId,
       fileName = '',
       fileUrl = '',
-      query = 'Summarize this document'
-    } = req.body;
+      query = 'Summarize this document',
+    } = req.body || {};
 
-    if (!query || !query.trim()) {
+    if (typeof query !== 'string' || !query.trim()) {
       return res.status(400).json({ error: 'Query is required.' });
     }
+    const cleanQuery = query.trim().slice(0, 3000);
+
+    // Look up resource record & verify squad access so users cannot probe unauthorized squad files
+    let resourceRecord = null;
+    if (resourceId && typeof resourceId === 'string') {
+      resourceRecord = await withRetry(() =>
+        prisma.resource.findUnique({
+          where: { id: resourceId },
+          include: {
+            squad: {
+              select: {
+                id: true,
+                ownerId: true,
+                members: { where: { userId: req.user.id }, select: { id: true } },
+              },
+            },
+          },
+        })
+      );
+    } else if (squadId && fileUrl) {
+      resourceRecord = await withRetry(() =>
+        prisma.resource.findFirst({
+          where: { squadId: String(squadId), url: String(fileUrl) },
+          include: {
+            squad: {
+              select: {
+                id: true,
+                ownerId: true,
+                members: { where: { userId: req.user.id }, select: { id: true } },
+              },
+            },
+          },
+        })
+      );
+    }
+
+    if (resourceRecord?.squad) {
+      const isAllowed =
+        resourceRecord.squad.ownerId === req.user.id ||
+        resourceRecord.squad.members.length > 0;
+      if (!isAllowed) {
+        return res.status(403).json({
+          error: 'Join this study squad first to analyze its uploaded documents.',
+        });
+      }
+    } else if (squadId && typeof squadId === 'string') {
+      const sq = await withRetry(() =>
+        prisma.squad.findUnique({
+          where: { id: squadId },
+          select: {
+            ownerId: true,
+            members: { where: { userId: req.user.id }, select: { id: true } },
+          },
+        })
+      );
+      if (sq && sq.ownerId !== req.user.id && sq.members.length === 0) {
+        return res.status(403).json({
+          error: 'Join this study squad first to analyze its uploaded documents.',
+        });
+      }
+    }
+
+    const effectiveFileUrl = resourceRecord?.url || (typeof fileUrl === 'string' ? fileUrl : '');
+    const effectiveTitle =
+      (typeof fileName === 'string' && fileName.trim()) ||
+      resourceRecord?.title ||
+      'Study Document';
 
     // Resolve local file path strictly within uploads directory (prevent path traversal)
     let localFilePath = null;
-    if (fileUrl) {
-      const fileNameOnly = path.basename(fileUrl);
-      const uploadsDir = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(__dirname, '..', 'uploads');
+    if (effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
+      const fileNameOnly = path.basename(effectiveFileUrl);
+      const uploadsDir = process.env.UPLOADS_DIR
+        ? path.resolve(process.env.UPLOADS_DIR)
+        : path.resolve(__dirname, '..', 'uploads');
       const resolvedPath = path.resolve(uploadsDir, fileNameOnly);
 
-      // Verify the file is strictly contained within uploads directory
       if (resolvedPath.startsWith(uploadsDir) && fs.existsSync(resolvedPath)) {
         localFilePath = resolvedPath;
       }
     }
 
-    if (localFilePath && fs.existsSync(localFilePath)) {
-      try {
-        const ext = path.extname(localFilePath).toLowerCase();
-        const stat = fs.statSync(localFilePath);
-
-        if (stat.size <= 20 * 1024 * 1024) {
-          const fileBuffer = fs.readFileSync(localFilePath);
-
-          let mimeType = 'application/pdf';
-          if (ext === '.pdf') mimeType = 'application/pdf';
-          else if (['.png', '.jpg', '.jpeg'].includes(ext)) mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-          else if (['.txt', '.md', '.json', '.js', '.py'].includes(ext)) mimeType = 'text/plain';
-
-          const docPrompt = `You are StudySquad Document AI Assistant. A student in a collaborative study group is studying this uploaded document: "${fileName || path.basename(localFilePath)}".
+    const docPrompt = `You are StudySquad Document AI Assistant. A student in a collaborative study group is studying this document: "${effectiveTitle}".
 
 Student's Question:
-"${query}"
+"${cleanQuery}"
 
 Instructions:
 1. Provide a comprehensive, accurate answer based directly on the document's content.
@@ -1006,70 +1128,121 @@ Instructions:
    - 🎯 Main Theme & Learning Objectives
    - 📌 Key Concepts, Rules, or Derivations
    - 💡 3 Key Exam Takeaways
-3. If the student asks a specific question, answer directly with page/section context where visible.
+3. If the student asks a specific question, answer directly with slide/page/section context where visible.
 4. Format cleanly using Markdown with bullet points, bold terms, and code blocks if relevant.`;
 
+    if (localFilePath && fs.existsSync(localFilePath)) {
+      try {
+        const ext = path.extname(localFilePath).toLowerCase();
+        const stat = fs.statSync(localFilePath);
+
+        if (stat.size <= 20 * 1024 * 1024) {
           let geminiResult = null;
-          if (mimeType === 'text/plain') {
-            const textContent = fileBuffer.toString('utf-8').slice(0, 50000);
-            geminiResult = await generateWithGemini(`${docPrompt}\n\nDocument Text Content:\n"""\n${textContent}\n"""`);
+
+          if (ext === '.pdf' || ['.png', '.jpg', '.jpeg'].includes(ext)) {
+            const fileBuffer = fs.readFileSync(localFilePath);
+            const mimeType =
+              ext === '.pdf'
+                ? 'application/pdf'
+                : ext === '.png'
+                ? 'image/png'
+                : 'image/jpeg';
+
+            geminiResult = await generateWithGemini([
+              docPrompt,
+              {
+                inlineData: {
+                  data: fileBuffer.toString('base64'),
+                  mimeType,
+                },
+              },
+            ]);
           } else {
-            const filePart = {
-              inlineData: {
-                data: fileBuffer.toString('base64'),
-                mimeType
-              }
-            };
-            geminiResult = await generateWithGemini([docPrompt, filePart]);
+            // Office (.pptx, .docx) and text (.txt, .md, .csv, .json) — extract text cleanly!
+            const extracted =
+              resourceRecord?.extractedText || extractDocumentText(localFilePath, ext);
+
+            if (extracted && resourceRecord && !resourceRecord.extractedText) {
+              prisma.resource
+                .update({
+                  where: { id: resourceRecord.id },
+                  data: { extractedText: extracted },
+                })
+                .catch(() => {});
+            }
+
+            if (extracted) {
+              geminiResult = await generateWithGemini(
+                `${docPrompt}\n\nExtracted Document Content:\n"""\n${extracted.slice(0, 50000)}\n"""`
+              );
+            }
           }
 
           if (geminiResult && geminiResult.text) {
             return res.json({
               answer: geminiResult.text,
-              fileName: fileName || path.basename(localFilePath),
-              poweredBy: `Google Gemini (${geminiResult.modelName})`
+              fileName: effectiveTitle,
+              poweredBy: `Google Gemini (${geminiResult.modelName})`,
             });
           }
         }
       } catch (docErr) {
-        console.warn('Gemini doc analysis error, falling back:', docErr.message);
-      }
-    } else {
-      try {
-        const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource: "${fileName}".
-Student's Question: "${query}"
-
-Provide a clear, detailed, and academically rigorous answer based on the concepts typically covered under "${fileName}". Format in clean Markdown with key takeaways and bullet points.`;
-        const geminiResult = await generateWithGemini(prompt);
-        if (geminiResult && geminiResult.text) {
-          return res.json({
-            answer: geminiResult.text,
-            fileName: fileName || 'Study Resource',
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
-          });
-        }
-      } catch (err) {
-        console.warn('Gemini fallback text call error:', err.message);
+        console.warn('Gemini doc analysis error, trying persisted text fallback:', docErr.message);
       }
     }
 
-    // Curated Heuristic Document response if Gemini key not set
-    const ext = fileName ? path.extname(fileName).toLowerCase() : '';
-    const answer = `📄 **Document Analysis for ${fileName || 'Study Material'}**\n\n` +
-      `**Question**: *"${query}"*\n\n` +
-      `• **Document Type**: ${ext ? ext.toUpperCase() : 'Lecture Document'}\n` +
-      `• **Key Focus**: This material covers fundamental concepts and applied problem solving.\n` +
-      `• **Recommended Study Method**:\n` +
-      `  1. Read key theorems and code listings first.\n` +
-      `  2. Discuss tricky slide points with your squad in the Chat tab.\n` +
-      `  3. Sketch architecture diagrams on the Live Whiteboard.\n\n` +
-      `💡 **Unlock Full Document Understanding**:\n` +
-      `Add your free **GEMINI_API_KEY** in \`backend/.env\`! Gemini 1.5 Flash reads PDFs, slides, and code natively to answer specific page-by-page questions!`;
+    // Persisted PostgreSQL text path (survives Render container redeploys!)
+    if (resourceRecord?.extractedText && resourceRecord.extractedText.trim()) {
+      try {
+        const geminiResult = await generateWithGemini(
+          `${docPrompt}\n\nExtracted Document Content:\n"""\n${resourceRecord.extractedText.slice(0, 50000)}\n"""`
+        );
+        if (geminiResult && geminiResult.text) {
+          return res.json({
+            answer: geminiResult.text,
+            fileName: effectiveTitle,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`,
+          });
+        }
+      } catch (persistErr) {
+        console.warn('Gemini persisted doc text error:', persistErr.message);
+      }
+    }
+
+    // Topic-level academic fallback if file is an external link or legacy pre-persistence upload
+    try {
+      const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource titled "${effectiveTitle}"${
+        effectiveFileUrl.startsWith('http') ? ` (${effectiveFileUrl})` : ''
+      }.
+Student's Question: "${cleanQuery}"
+
+Provide a clear, detailed, academically rigorous explanation covering the concepts in "${effectiveTitle}". Format in clean Markdown with key takeaways and bullet points.`;
+      const geminiResult = await generateWithGemini(prompt);
+      if (geminiResult && geminiResult.text) {
+        return res.json({
+          answer: geminiResult.text,
+          fileName: effectiveTitle,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`,
+        });
+      }
+    } catch (err) {
+      console.warn('Gemini fallback text call error:', err.message);
+    }
+
+    const ext = effectiveTitle ? path.extname(effectiveTitle).toLowerCase() : '';
+    const answer =
+      `📄 **Document Study Guide — ${effectiveTitle}**\n\n` +
+      `**Question**: *"${cleanQuery}"*\n\n` +
+      `• **Document Format**: ${ext ? ext.toUpperCase() : 'Study Material'}\n` +
+      `• **Recommended Study Strategy**:\n` +
+      `  1. Identify the primary definitions, theorems, and worked examples.\n` +
+      `  2. Copy key slide bullets into **Shared Notes** to generate active-recall flashcards.\n` +
+      `  3. Sketch tricky diagrams or derivations with teammates on the **Live Whiteboard**.`;
 
     return res.json({
       answer,
-      fileName: fileName || 'Study Document',
-      poweredBy: 'StudySquad Document Engine'
+      fileName: effectiveTitle,
+      poweredBy: 'StudySquad Smart Engine',
     });
   } catch (error) {
     console.error('Chat doc error:', error);
@@ -1081,17 +1254,22 @@ Provide a clear, detailed, and academically rigorous answer based on the concept
 router.post('/viva-simulator', requireAuth, enforceAiLimit, async (req, res) => {
   try {
     const {
-      subject = 'Computer Science',
-      topic = 'Data Structures & Algorithms',
-      level = 'College Viva',
+      subject: rawSubject = 'Computer Science',
+      topic: rawTopic = 'Data Structures & Algorithms',
+      level: rawLevel = 'College Viva',
       questionNumber = 1,
       totalQuestions = 5,
-      userResponse = '',
+      userResponse: rawUserResponse = '',
       previousQuestion = '',
       vivaHistory = [],
       excludeQuestions = [],
       seed = 0,
-    } = req.body;
+    } = req.body || {};
+
+    const subject = typeof rawSubject === 'string' && rawSubject.trim() ? rawSubject.trim() : 'Computer Science';
+    const topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim() : 'Data Structures & Algorithms';
+    const level = typeof rawLevel === 'string' && rawLevel.trim() ? rawLevel.trim() : 'College Viva';
+    const userResponse = typeof rawUserResponse === 'string' ? rawUserResponse : '';
 
     const isFirstQuestion = !userResponse || userResponse.trim().length === 0;
     const targetNum = Number(totalQuestions);
@@ -1247,7 +1425,14 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
 // POST /api/ai/generate-cheatsheet - 1-Page High-Yield Revision Matrix
 router.post('/generate-cheatsheet', requireAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { subject = 'Computer Science', topic = 'Data Structures & Algorithms', notes = '' } = req.body;
+    const {
+      subject: rawSubject = 'Computer Science',
+      topic: rawTopic = 'Data Structures & Algorithms',
+      notes: rawNotes = '',
+    } = req.body || {};
+    const subject = typeof rawSubject === 'string' && rawSubject.trim() ? rawSubject.trim() : 'Computer Science';
+    const topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim() : 'Data Structures & Algorithms';
+    const notes = typeof rawNotes === 'string' ? rawNotes : '';
 
     const prompt = `You are a world-class academic tutor and exam author.
 Create an ultra-dense, high-impact "1-Page High-Yield Exam Cheat Sheet" for:
@@ -1310,8 +1495,8 @@ Make it dense, rigorous, practical, and directly applicable for getting an A+ on
 // POST /api/ai/feynman-explain - 3-Tier Concept Explainer
 router.post('/feynman-explain', requireAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { concept = '', subject = 'General Studies' } = req.body;
-    if (!concept || !concept.trim()) {
+    const { concept = '', subject = 'General Studies' } = req.body || {};
+    if (typeof concept !== 'string' || !concept.trim()) {
       return res.status(400).json({ error: 'Concept is required.' });
     }
 
@@ -1375,8 +1560,8 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
 // POST /api/ai/code-audit - Code & Solution Diagnostic Auditor
 router.post('/code-audit', requireAuth, enforceAiLimit, async (req, res) => {
   try {
-    const { code = '', language = 'javascript', problem = '' } = req.body;
-    if (!code || !code.trim()) {
+    const { code = '', language = 'javascript', problem = '' } = req.body || {};
+    if (typeof code !== 'string' || !code.trim()) {
       return res.status(400).json({ error: 'Code or solution text is required.' });
     }
 
