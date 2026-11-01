@@ -64,6 +64,15 @@ app.use(
   })
 );
 
+// Canonical Redirect: Automatically route any onrender.com visits to official domain https://studysquadai.com
+app.use((req, res, next) => {
+  const host = (req.headers.host || '').toLowerCase();
+  if (host.includes('onrender.com') && !req.path.startsWith('/api') && req.path !== '/health') {
+    return res.redirect(301, `https://studysquadai.com${req.originalUrl}`);
+  }
+  next();
+});
+
 // Non-blocking gzip compression for JSON API payloads > 1 KB
 app.use((req, res, next) => {
   const acceptEncoding = req.headers['accept-encoding'] || '';
