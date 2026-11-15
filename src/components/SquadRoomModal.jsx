@@ -141,7 +141,21 @@ export default function SquadRoomModal({
   const [meetingInput, setMeetingInput] = useState(squad?.meetingUrl || squad?.link || '');
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
+  const shareMenuRef = useRef(null);
   const [isSavingMeeting, setIsSavingMeeting] = useState(false);
+
+  // Close social share popover when clicking outside
+  useEffect(() => {
+    if (!isShareMenuOpen) return;
+    const handleOutsideClick = (e) => {
+      if (shareMenuRef.current && !shareMenuRef.current.contains(e.target)) {
+        setIsShareMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isShareMenuOpen]);
 
   // Timetable & Exam State
   const [squadEvents, setSquadEvents] = useState([]);
@@ -648,14 +662,44 @@ export default function SquadRoomModal({
   };
 
   // Viral Share / Invite classmates directly to this squad
+  const squadInviteUrl = `${typeof window !== 'undefined' ? window.location.origin : 'https://studysquadai.com'}/?joinSquad=${squad.id}`;
+  const squadShareText = `🔥 Join my "${squad.name}" study squad on StudySquad! We're studying live with 24/7 AI tutor, whiteboard & focus beats:`;
+
   const handleInviteClassmates = () => {
-    const inviteUrl = `${window.location.origin}/?joinSquad=${squad.id}`;
-    const shareText = `🔥 Join my "${squad.name}" study squad on StudySquad! We're studying live with 24/7 AI tutor & focus beats:\n${inviteUrl}`;
+    const fullShareText = `${squadShareText}\n${squadInviteUrl}`;
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(shareText);
+      navigator.clipboard.writeText(fullShareText);
     }
     setCopiedInvite(true);
     setTimeout(() => setCopiedInvite(false), 2500);
+    setIsShareMenuOpen((prev) => !prev);
+  };
+
+  const handleSocialShare = (platform) => {
+    const encodedUrl = encodeURIComponent(squadInviteUrl);
+    const encodedText = encodeURIComponent(`${squadShareText} ${squadInviteUrl}`);
+    const encodedTitle = encodeURIComponent(squadShareText);
+
+    if (platform === 'whatsapp') {
+      window.open(`https://wa.me/?text=${encodedText}`, '_blank', 'noopener,noreferrer');
+    } else if (platform === 'telegram') {
+      window.open(`https://t.me/share/url?url=${encodedUrl}&text=${encodedTitle}`, '_blank', 'noopener,noreferrer');
+    } else if (platform === 'facebook') {
+      window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedTitle}`, '_blank', 'noopener,noreferrer');
+    } else if (platform === 'twitter') {
+      window.open(`https://twitter.com/intent/tweet?text=${encodedText}`, '_blank', 'noopener,noreferrer');
+    } else if (platform === 'linkedin') {
+      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`, '_blank', 'noopener,noreferrer');
+    } else if (platform === 'native' && navigator.share) {
+      navigator
+        .share({
+          title: `${squad.name} — StudySquad AI`,
+          text: squadShareText,
+          url: squadInviteUrl,
+        })
+        .catch(() => {});
+    }
+    setIsShareMenuOpen(false);
   };
 
   // Save new meeting link (host can update meeting url directly from room)
@@ -726,16 +770,93 @@ export default function SquadRoomModal({
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={handleInviteClassmates}
-                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                title="Copy WhatsApp/Discord invite link"
-              >
-                {copiedInvite ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <UserPlus className="w-3.5 h-3.5 text-emerald-400" />}
-                <span className="hidden sm:inline">{copiedInvite ? 'Invite Copied!' : 'Invite Classmates'}</span>
-                <span className="sm:hidden">{copiedInvite ? 'Copied!' : 'Invite'}</span>
-              </button>
+              <div className="relative" ref={shareMenuRef}>
+                <button
+                  type="button"
+                  onClick={handleInviteClassmates}
+                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                  title="Share to WhatsApp, Telegram, Facebook or copy link"
+                >
+                  {copiedInvite ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <UserPlus className="w-3.5 h-3.5 text-emerald-400" />}
+                  <span className="hidden sm:inline">{copiedInvite ? 'Invite Copied!' : 'Invite Classmates'}</span>
+                  <span className="sm:hidden">{copiedInvite ? 'Copied!' : 'Invite'}</span>
+                </button>
+
+                {isShareMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl p-2 z-50 backdrop-blur-xl">
+                    <div className="px-2.5 py-1.5 text-[11px] font-bold text-neutral-400 uppercase tracking-wider border-b border-white/10 mb-1">
+                      Share Squad Room
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialShare('whatsapp')}
+                      className="w-full px-3 py-2 rounded-xl hover:bg-emerald-500/15 text-left text-xs font-semibold text-emerald-300 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span>Share on WhatsApp</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Instant</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialShare('telegram')}
+                      className="w-full px-3 py-2 rounded-xl hover:bg-sky-500/15 text-left text-xs font-semibold text-sky-300 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span>Share on Telegram</span>
+                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialShare('facebook')}
+                      className="w-full px-3 py-2 rounded-xl hover:bg-blue-500/15 text-left text-xs font-semibold text-blue-300 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span>Share on Facebook</span>
+                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialShare('twitter')}
+                      className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-left text-xs font-semibold text-neutral-200 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span>Share on X (Twitter)</span>
+                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialShare('linkedin')}
+                      className="w-full px-3 py-2 rounded-xl hover:bg-indigo-500/15 text-left text-xs font-semibold text-indigo-300 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span>Share on LinkedIn</span>
+                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    </button>
+                    {typeof navigator !== 'undefined' && navigator.share && (
+                      <button
+                        type="button"
+                        onClick={() => handleSocialShare('native')}
+                        className="w-full px-3 py-2 rounded-xl hover:bg-purple-500/15 text-left text-xs font-semibold text-purple-300 flex items-center justify-between transition-colors cursor-pointer"
+                      >
+                        <span>More Apps (Phone Share)</span>
+                        <Share2 className="w-3 h-3 opacity-70" />
+                      </button>
+                    )}
+                    <div className="border-t border-white/10 mt-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(`${squadShareText}\n${squadInviteUrl}`);
+                          }
+                          setCopiedInvite(true);
+                          setTimeout(() => setCopiedInvite(false), 2500);
+                          setIsShareMenuOpen(false);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-left text-xs font-semibold text-neutral-300 flex items-center justify-between transition-colors cursor-pointer"
+                      >
+                        <span>{copiedInvite ? 'Invite Link Copied!' : 'Copy Invite Link'}</span>
+                        {copiedInvite ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 opacity-70" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <button
                 type="button"
