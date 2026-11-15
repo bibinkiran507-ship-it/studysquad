@@ -702,4 +702,12 @@ io.on('connection', (socket) => {
 server.listen(PORT, () => {
   console.log(`🚀 StudySquad Backend running on http://localhost:${PORT}`);
   console.log(`⚡ Socket.io ready for live study rooms`);
+
+  // Keep Render Free Tier awake 24/7 so Googlebot and students never hit a 50s cold-start delay
+  if (process.env.NODE_ENV === 'production') {
+    const KEEP_ALIVE_URL = 'https://studysquadai.com/api/health';
+    setInterval(() => {
+      fetch(KEEP_ALIVE_URL).catch(() => {});
+    }, 13 * 60 * 1000); // Every 13 minutes (under Render's 15-minute idle spin-down threshold)
+  }
 });

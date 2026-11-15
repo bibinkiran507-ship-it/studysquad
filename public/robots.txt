@@ -1,6 +1,9 @@
 User-agent: *
 Allow: /
-Disallow: /api/
+Allow: /api/squads
+Allow: /api/health
+Disallow: /api/auth/
+Disallow: /api/payment/
 
 Sitemap: https://studysquadai.com/sitemap.xml
 
