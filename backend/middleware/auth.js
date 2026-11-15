@@ -117,7 +117,7 @@ export const requireAuth = async (req, res, next) => {
         req.user = { ...user, isPro: resolveActivePro(user) };
         return next();
       }
-    } catch (_) {}
+    } catch {}
     return res.status(401).json({ error: 'Authentication required. Please log in.' });
   }
 

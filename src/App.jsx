@@ -130,7 +130,7 @@ function AppInner() {
             new Notification(`🟢 ${alert.userName} started studying live!`, {
               body: `In "${alert.squadName}" (${alert.subject}). Click to join!`,
             });
-          } catch (_) {}
+          } catch {}
         }
       }
     });
@@ -151,7 +151,7 @@ function AppInner() {
       const requestPerm = () => {
         try {
           Notification.requestPermission();
-        } catch (_) {}
+        } catch {}
       };
       window.addEventListener('click', requestPerm, { once: true });
       return () => window.removeEventListener('click', requestPerm);

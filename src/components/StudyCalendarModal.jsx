@@ -9,16 +9,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  CheckCircle2,
-  AlertCircle,
   Sparkles,
-  BookOpen,
   Users,
   Trash2,
   Check,
   Copy,
-  ExternalLink,
-  Target,
   ArrowRight,
   CalendarDays,
 } from 'lucide-react';
@@ -122,13 +117,16 @@ export default function StudyCalendarModal({
 
   // State
   const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'session' | 'exam'
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAddFormOpen, setIsAddFormOpen] = useState(false);
   const [aiPlanModal, setAiPlanModal] = useState({ isOpen: false, event: null, plan: '', loading: false });
   const [copiedPlan, setCopiedPlan] = useState(false);
+
+  // Live timer tick for countdowns (ONLY runs while modal is open — zero idle CPU ticks!)
+  const [now, setNow] = useState(() => Date.now());
 
   // Form State
   const [formType, setFormType] = useState('session'); // 'session' | 'exam'
@@ -168,8 +166,6 @@ export default function StudyCalendarModal({
     }
   }, [isOpen]);
 
-  // Live timer tick for countdowns (ONLY runs while modal is open — zero idle CPU ticks!)
-  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!isOpen) return undefined;
     const timer = setInterval(() => setNow(Date.now()), 1000);

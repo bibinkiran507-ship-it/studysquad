@@ -378,7 +378,7 @@ io.on('connection', (socket) => {
               resolvedSquadName = sq.name;
               resolvedSubject = sq.subject;
             }
-          } catch (_) {}
+          } catch {}
         }
 
         socket.broadcast.emit('global_user_started_study', {

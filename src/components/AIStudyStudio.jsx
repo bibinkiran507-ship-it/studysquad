@@ -31,108 +31,11 @@ import {
   Lightbulb,
   SendHorizontal,
   Bot,
-  MessageSquareText,
   Trash2,
   Image as ImageIcon,
   X,
 } from 'lucide-react';
 import { aiAPI, squadsAPI } from '../api/client';
-
-function ProFeatureLockCard({ icon: Icon, title, tag = 'STUDYSQUAD PRO REQUIRED', description, perks = [], accent = 'amber', onUpgrade }) {
-  const accentTheme = {
-    rose: {
-      border: 'border-rose-500/30',
-      bg: 'from-rose-950/20 via-neutral-900 to-black',
-      badge: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
-      iconBg: 'bg-rose-500/20 border-rose-500/40 text-rose-400 shadow-rose-500/10',
-      perkDot: 'text-rose-400',
-    },
-    amber: {
-      border: 'border-amber-500/30',
-      bg: 'from-amber-950/20 via-neutral-900 to-black',
-      badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-      iconBg: 'bg-amber-500/20 border-amber-400/40 text-amber-400 shadow-amber-500/10',
-      perkDot: 'text-amber-400',
-    },
-    cyan: {
-      border: 'border-cyan-500/30',
-      bg: 'from-cyan-950/20 via-neutral-900 to-black',
-      badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-      iconBg: 'bg-cyan-500/20 border-cyan-400/40 text-cyan-400 shadow-cyan-500/10',
-      perkDot: 'text-cyan-400',
-    },
-    teal: {
-      border: 'border-teal-500/30',
-      bg: 'from-teal-950/20 via-neutral-900 to-black',
-      badge: 'bg-teal-500/20 text-teal-300 border-teal-500/40',
-      iconBg: 'bg-teal-500/20 border-teal-400/40 text-teal-400 shadow-teal-500/10',
-      perkDot: 'text-teal-400',
-    },
-    indigo: {
-      border: 'border-indigo-500/30',
-      bg: 'from-indigo-950/20 via-neutral-900 to-black',
-      badge: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
-      iconBg: 'bg-indigo-500/20 border-indigo-400/40 text-indigo-400 shadow-indigo-500/10',
-      perkDot: 'text-indigo-400',
-    },
-    blue: {
-      border: 'border-blue-500/30',
-      bg: 'from-blue-950/20 via-neutral-900 to-black',
-      badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-      iconBg: 'bg-blue-500/20 border-blue-400/40 text-blue-400 shadow-blue-500/10',
-      perkDot: 'text-blue-400',
-    },
-  }[accent] || {
-    border: 'border-amber-500/30',
-    bg: 'from-amber-950/20 via-neutral-900 to-black',
-    badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-    iconBg: 'bg-amber-500/20 border-amber-400/40 text-amber-400 shadow-amber-500/10',
-    perkDot: 'text-amber-400',
-  };
-
-  return (
-    <div className={`p-6 sm:p-8 rounded-3xl border ${accentTheme.border} bg-gradient-to-b ${accentTheme.bg} space-y-4 max-w-lg mx-auto shadow-2xl text-center my-2`}>
-      <div className="flex items-center justify-center">
-        <div className={`w-14 h-14 rounded-2xl ${accentTheme.iconBg} border flex items-center justify-center shadow-lg`}>
-          <Icon className="w-7 h-7" />
-        </div>
-      </div>
-
-      <div className="space-y-1">
-        <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${accentTheme.badge} inline-flex items-center gap-1`}>
-          <Crown className="w-3 h-3 text-amber-400" />
-          <span>{tag}</span>
-        </span>
-        <h4 className="text-xl font-black text-white">{title}</h4>
-        <p className="text-xs text-neutral-300 max-w-sm mx-auto leading-relaxed">{description}</p>
-      </div>
-
-      {perks.length > 0 && (
-        <div className="p-3.5 rounded-2xl bg-black/50 border border-white/10 text-left space-y-2">
-          {perks.map((perk, idx) => (
-            <div key={idx} className="flex items-start gap-2 text-xs text-neutral-200">
-              <Check className={`w-3.5 h-3.5 ${accentTheme.perkDot} shrink-0 mt-0.5`} />
-              <span>{perk}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="pt-1 space-y-2">
-        <button
-          type="button"
-          onClick={onUpgrade}
-          className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-neutral-950 font-black text-xs sm:text-sm shadow-md shadow-amber-500/20 transition-all cursor-pointer hover:scale-102 flex items-center justify-center gap-2"
-        >
-          <Crown className="w-4 h-4 text-neutral-950" />
-          <span>Upgrade to Pro to Unlock (₹199/mo)</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-        <p className="text-[10px] text-neutral-400">Instant access to all 5 Pro AI engines • Powered by Gemini AI • Cancel anytime</p>
-      </div>
-    </div>
-  );
-}
 
 function renderInlineText(text) {
   if (!text) return text;

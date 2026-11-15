@@ -652,7 +652,7 @@ router.get('/user/:id', async (req, res) => {
         squadsJoined: distinctSquadCount,
       },
     });
-  } catch (err) {
+  } catch {
     return res.status(500).json({ error: 'Failed to get user.' });
   }
 });

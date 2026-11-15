@@ -58,7 +58,7 @@ export async function withRetry(queryFn, retries = 3) {
 
         try {
           await prisma.$connect();
-        } catch (_) {
+        } catch {
           // ignore connect errors during retry; next queryFn() attempt will retry pool connect
         }
       } else {

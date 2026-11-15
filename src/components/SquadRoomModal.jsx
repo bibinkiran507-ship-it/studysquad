@@ -33,7 +33,6 @@ import {
   Volume2,
   VolumeX,
   Calendar as CalendarIcon,
-  Trash2,
   LogOut,
   Share2,
   UserPlus,
@@ -379,7 +378,7 @@ export default function SquadRoomModal({
             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.4);
-          } catch (_) {
+          } catch {
             /* audio not available, silently ignore */
           }
         }
@@ -719,7 +718,6 @@ export default function SquadRoomModal({
   };
 
   const membersList = squad.members || [];
-  const memberCount = squad.memberCount ?? squad.membersCount ?? membersList.length;
 
   return (
     <AnimatePresence>

@@ -1304,7 +1304,7 @@ router.post('/viva-simulator', requireAuth, enforceAiLimit, async (req, res) => 
       : '';
 
     const exclusionClause = exclusions.length > 0
-      ? `\nCRITICAL DIVERSITY RULE: You MUST NOT repeat, rephrase, or ask anything similar to the following previously asked questions:\n${exclusions.slice(-5).map((q, idx) => `• "${q}"`).join('\n')}\nPick a completely different subtopic, angle, or scenario of "${topic}".\n`
+      ? `\nCRITICAL DIVERSITY RULE: You MUST NOT repeat, rephrase, or ask anything similar to the following previously asked questions:\n${exclusions.slice(-5).map((q) => `• "${q}"`).join('\n')}\nPick a completely different subtopic, angle, or scenario of "${topic}".\n`
       : '';
 
     const prompt = isFirstQuestion

@@ -29,7 +29,6 @@ export default function InRoomVideo({ squad, user }) {
 
   const platformName = squad.platform || 'Google Meet';
   const effectiveMeetingUrl = meetingUrl.trim() || getFallbackMeetingUrl(platformName);
-  const isOwner = user && (squad.ownerId === user.id || squad.owner?.id === user.id);
 
   // Clean room identifier for Jitsi
   const roomId = `StudySquad_${(squad.id || 'room').replace(/[^a-zA-Z0-9]/g, '')}`;
