@@ -21,7 +21,7 @@ import { paymentAPI } from '../api/client';
 
 export default function UpgradeProModal({ isOpen, onClose }) {
   const { user, setUser, refreshUser, openAuthModal } = useAuth();
-  const [selectedPlan, setSelectedPlan] = useState('yearly'); // 'monthly' | 'yearly'
+  const [selectedPlan, setSelectedPlan] = useState('yearly'); // 'free' | 'monthly' | 'yearly'
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -111,6 +111,15 @@ export default function UpgradeProModal({ isOpen, onClose }) {
   };
 
   const handleSubscribe = async () => {
+    if (selectedPlan === 'free') {
+      setSelectedPlan('yearly');
+      onClose();
+      if (!user) {
+        openAuthModal('register');
+      }
+      return;
+    }
+
     if (!user) {
       onClose();
       openAuthModal('register');
@@ -267,7 +276,7 @@ export default function UpgradeProModal({ isOpen, onClose }) {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 16 }}
           transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="relative w-full max-w-2xl bg-neutral-900 border border-emerald-500/30 rounded-3xl shadow-2xl overflow-hidden p-6 sm:p-8 text-white max-h-[92vh] overflow-y-auto"
+          className="relative w-full max-w-4xl bg-neutral-900 border border-emerald-500/30 rounded-3xl shadow-2xl overflow-hidden p-6 sm:p-8 text-white max-h-[92vh] overflow-y-auto"
         >
           {/* Close button */}
           <button
@@ -280,16 +289,16 @@ export default function UpgradeProModal({ isOpen, onClose }) {
           </button>
 
           {/* Header */}
-          <div className="text-center max-w-md mx-auto mb-6">
+          <div className="text-center max-w-xl mx-auto mb-6">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500/20 to-yellow-500/20 border border-amber-400/40 text-amber-300 text-xs font-bold uppercase tracking-wider mb-3">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              StudySquad Pro Membership
+              StudySquad Plans &amp; Pro Membership
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Supercharge Your Academic Grades
             </h2>
             <p className="text-sm text-neutral-300 mt-2">
-              Free accounts include 5 AI generations/day. Upgrade to Pro for unlimited access to all 7 AI Academic Engines &amp; 30 MB document chat.
+              Start free with 5 AI generations/day &amp; live study rooms, or upgrade anytime for unlimited access to all 7 AI Academic Engines &amp; 30 MB document chat.
             </p>
           </div>
 
@@ -371,20 +380,64 @@ export default function UpgradeProModal({ isOpen, onClose }) {
             </div>
           )}
 
-          {/* Plan Selector */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          {/* Plan Selector (Free -> Monthly -> Annual) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {/* Free Plan */}
+            <div
+              onClick={() => setSelectedPlan('free')}
+              className={`p-4 rounded-2xl border-2 cursor-pointer transition-all relative flex flex-col ${
+                selectedPlan === 'free'
+                  ? 'border-cyan-400 bg-cyan-950/30 shadow-lg shadow-cyan-500/10'
+                  : 'border-white/10 bg-white/5 hover:border-white/20'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm font-bold text-neutral-200">Free Plan</span>
+                <span
+                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${
+                    user && !user.isPro
+                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30'
+                      : 'bg-white/10 text-neutral-300'
+                  }`}
+                >
+                  {user && !user.isPro ? 'Current Plan' : 'Starter Tier'}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-3xl font-black text-white">₹0</span>
+                <span className="text-xs text-neutral-400">/ forever</span>
+              </div>
+              <p className="text-[11px] text-neutral-400 mt-2 mb-3">
+                No card needed. Ideal for testing StudySquad rooms and AI study tools.
+              </p>
+              <ul className="space-y-1.5 text-[11px] text-neutral-300 mt-auto pt-2 border-t border-white/10">
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>Unlimited Live Study Rooms</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>Pomodoro, Whiteboard &amp; Notes</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>5 AI generations / day (resets IST)</span>
+                </li>
+              </ul>
+            </div>
+
             {/* Monthly Plan */}
             <div
               onClick={() => setSelectedPlan('monthly')}
-              className={`p-4 rounded-2xl border-2 cursor-pointer transition-all relative ${
+              className={`p-4 rounded-2xl border-2 cursor-pointer transition-all relative flex flex-col ${
                 selectedPlan === 'monthly'
                   ? 'border-emerald-400 bg-emerald-950/40 shadow-lg shadow-emerald-500/10'
                   : 'border-white/10 bg-white/5 hover:border-white/20'
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-sm font-bold text-neutral-200">Monthly Plan</span>
-                <span className="text-xs px-2 py-0.5 rounded-md bg-white/10 text-neutral-300">
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white/10 text-neutral-300">
                   30 Days Access
                 </span>
               </div>
@@ -392,15 +445,29 @@ export default function UpgradeProModal({ isOpen, onClose }) {
                 <span className="text-3xl font-black text-white">₹199</span>
                 <span className="text-xs text-neutral-400">/ month</span>
               </div>
-              <p className="text-[11px] text-neutral-400 mt-2">
+              <p className="text-[11px] text-neutral-400 mt-2 mb-3">
                 One-time 30-day pass (no auto-debit). Perfect for midterms &amp; exam sprints.
               </p>
+              <ul className="space-y-1.5 text-[11px] text-neutral-200 mt-auto pt-2 border-t border-white/10">
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Unlimited 24/7 AI across 7 Engines</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>30 MB PDF, PPTX &amp; DOCX AI Chat</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Mock Viva, Quizzes &amp; Code Auditor</span>
+                </li>
+              </ul>
             </div>
 
             {/* Yearly Plan (Best Value) */}
             <div
               onClick={() => setSelectedPlan('yearly')}
-              className={`p-4 rounded-2xl border-2 cursor-pointer transition-all relative ${
+              className={`p-4 rounded-2xl border-2 cursor-pointer transition-all relative flex flex-col ${
                 selectedPlan === 'yearly'
                   ? 'border-amber-400 bg-amber-950/30 shadow-lg shadow-amber-500/10'
                   : 'border-white/10 bg-white/5 hover:border-white/20'
@@ -409,9 +476,9 @@ export default function UpgradeProModal({ isOpen, onClose }) {
               <div className="absolute -top-2.5 right-4 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-500 text-neutral-950 text-[10px] font-black uppercase tracking-wider shadow-sm flex items-center gap-1">
                 <Flame className="w-3 h-3" /> Best Value • Save 58%
               </div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-sm font-bold text-amber-300">Annual Scholar</span>
-                <span className="text-xs px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-200">
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-200">
                   365 Days
                 </span>
               </div>
@@ -419,9 +486,23 @@ export default function UpgradeProModal({ isOpen, onClose }) {
                 <span className="text-3xl font-black text-white">₹999</span>
                 <span className="text-xs text-neutral-400">/ year (₹83/mo)</span>
               </div>
-              <p className="text-[11px] text-neutral-300 mt-2">
+              <p className="text-[11px] text-neutral-300 mt-2 mb-3">
                 Full academic year access across all semesters, vivas &amp; placement prep.
               </p>
+              <ul className="space-y-1.5 text-[11px] text-amber-100 mt-auto pt-2 border-t border-white/10">
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Everything in Monthly Pro (365 Days)</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Just ₹83/month (Save 58%)</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Full year exams, vivas &amp; placements</span>
+                </li>
+              </ul>
             </div>
           </div>
 
@@ -443,12 +524,16 @@ export default function UpgradeProModal({ isOpen, onClose }) {
             </div>
           </div>
 
-          {/* Payment CTA button */}
+          {/* Payment / Plan CTA button */}
           <button
             type="button"
             disabled={loading || verifying || reconciling || success}
             onClick={handleSubscribe}
-            className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-500 text-neutral-950 font-extrabold text-sm sm:text-base flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer active:scale-98 disabled:opacity-50"
+            className={`w-full py-3.5 px-6 rounded-2xl font-extrabold text-sm sm:text-base flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-98 disabled:opacity-50 ${
+              selectedPlan === 'free'
+                ? 'bg-white/15 hover:bg-white/25 text-white border border-white/25 shadow-lg shadow-black/20'
+                : 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-500 text-neutral-950 shadow-lg shadow-emerald-500/25'
+            }`}
           >
             {verifying ? (
               <>
@@ -464,6 +549,18 @@ export default function UpgradeProModal({ isOpen, onClose }) {
               <>
                 <CheckCircle2 className="w-5 h-5" />
                 <span>Pro Activated!</span>
+              </>
+            ) : selectedPlan === 'free' ? (
+              <>
+                <Sparkles className="w-5 h-5 text-cyan-300" />
+                <span>
+                  {!user
+                    ? 'Start Free Plan • ₹0'
+                    : user.isPro
+                    ? 'Return to Study Rooms'
+                    : 'Continue with Free Plan (5 AI/day)'}
+                </span>
+                <ArrowRight className="w-4 h-4" />
               </>
             ) : (
               <>
