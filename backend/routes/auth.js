@@ -324,9 +324,13 @@ router.post('/google', async (req, res) => {
         })
       );
     } else {
-      // Preserve any custom avatar the user set; only update if empty or default DiceBear
+      // Preserve custom avatars the user manually set; sync if empty, DiceBear, or an older Google URL
       const shouldSyncGoogleAvatar =
-        verifiedAvatar && (!user.avatar || user.avatar.includes('dicebear.com'));
+        verifiedAvatar &&
+        verifiedAvatar !== user.avatar &&
+        (!user.avatar ||
+          user.avatar.includes('dicebear.com') ||
+          user.avatar.includes('googleusercontent.com'));
 
       if (shouldSyncGoogleAvatar || !user.isEmailVerified) {
         user = await withRetry(() =>
