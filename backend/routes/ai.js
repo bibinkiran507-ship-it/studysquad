@@ -66,7 +66,7 @@ const withTimeout = (promise, ms = 25000) =>
   });
 
 // Helper to initialize Gemini with active model support
-export const getGeminiModel = (modelName = 'gemini-2.5-flash') => {
+export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
@@ -80,28 +80,35 @@ export const getGeminiModel = (modelName = 'gemini-2.5-flash') => {
   }
 };
 
-// Resilient multi-model Gemini generator (valid models + 25s timeout + transient retry)
+// Track models that recently timed out or returned 404/429 so students never hit repeated 20s stalls
+const MODEL_COOLDOWN_MS = 10 * 60 * 1000;
+const unhealthyModelUntil = new Map();
+
+// Resilient multi-model Gemini generator (fast verified models first + cooldown skipping + transient retry)
 export const generateWithGemini = async (contents, options = {}) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     return null;
   }
   const candidateModels = [
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-flash-latest',
     'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-flash-latest',
   ];
+  const now = Date.now();
+  const healthy = candidateModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
+  const orderedModels = healthy.length > 0 ? healthy : candidateModels;
   const genAI = new GoogleGenerativeAI(apiKey.trim());
 
-  for (const modelName of candidateModels) {
+  for (const modelName of orderedModels) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const model = genAI.getGenerativeModel({ model: modelName, ...options });
-        const result = await withTimeout(model.generateContent(contents), 25000);
+        const result = await withTimeout(model.generateContent(contents), 18000);
         const text = result?.response?.text ? result.response.text() : '';
         if (text) {
+          unhealthyModelUntil.delete(modelName);
           return { text, modelName };
         }
       } catch (err) {
@@ -112,6 +119,14 @@ export const generateWithGemini = async (contents, options = {}) => {
         ) {
           await new Promise((r) => setTimeout(r, 400));
           continue;
+        }
+        if (
+          msg.includes('404') ||
+          msg.includes('429') ||
+          msg.includes('timed out') ||
+          msg.includes('Not Found')
+        ) {
+          unhealthyModelUntil.set(modelName, Date.now() + MODEL_COOLDOWN_MS);
         }
         break;
       }
