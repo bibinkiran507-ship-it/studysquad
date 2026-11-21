@@ -5,6 +5,11 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import prisma, { withRetry } from '../lib/prisma.js';
 import {
+  resolvePublicAppUrl,
+  sendPasswordResetEmail,
+  isEmailProviderConfigured,
+} from '../lib/mailer.js';
+import {
   requireAuth,
   getJwtSecret,
   resolveActivePro,
@@ -505,18 +510,20 @@ router.post('/forgot-password', async (req, res) => {
       return res.status(400).json({ error: 'Email is required.' });
     }
 
+    const genericResponseMessage = isEmailProviderConfigured()
+      ? 'If that email is registered, a password reset link and code have been sent to your inbox (check Spam/Promotions if not visible within 1 minute).'
+      : 'If that email is registered, password recovery instructions have been prepared. You can also sign in instantly using "Continue with Google" with the same email!';
+
     const user = await withRetry(() =>
       prisma.user.findUnique({
         where: { email: email.toLowerCase().trim() },
-        select: { id: true, email: true },
+        select: { id: true, email: true, name: true },
       })
     );
 
-    // Always return success to avoid email enumeration
+    // Always return identical success message to avoid email enumeration
     if (!user) {
-      return res.json({
-        message: 'If that email is registered, password recovery instructions have been prepared.',
-      });
+      return res.json({ message: genericResponseMessage });
     }
 
     await withRetry(() =>
@@ -537,15 +544,28 @@ router.post('/forgot-password', async (req, res) => {
     );
 
     const isDev = process.env.NODE_ENV !== 'production';
-    const resetLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/login?resetToken=${rawToken}`;
+    const appBaseUrl = resolvePublicAppUrl();
+    const resetLink = `${appBaseUrl}/login?resetToken=${rawToken}`;
+
+    const mailResult = await sendPasswordResetEmail({
+      to: user.email,
+      name: user.name,
+      resetLink,
+      rawToken,
+    });
 
     if (isDev) {
-      console.log(`[Password Reset] Dev reset link generated for ${user.email}`);
+      console.log(
+        `[Password Reset] Dev reset link generated for ${user.email} (email sent: ${mailResult.sent})`
+      );
+    } else if (!mailResult.sent) {
+      console.warn(
+        `[Password Reset] Reset token created for ${user.email}, but email was not sent (${mailResult.reason}). Configure RESEND_API_KEY or BREVO_API_KEY.`
+      );
     }
 
     return res.json({
-      message:
-        'If that email is registered, a password reset link has been sent. You can also sign in instantly using "Continue with Google" with the same email!',
+      message: genericResponseMessage,
       ...(isDev ? { devResetToken: rawToken, devResetLink: resetLink } : {}),
     });
   } catch (err) {

@@ -35,18 +35,43 @@ process.on('uncaughtException', (err) => {
 
 const server = http.createServer(app);
 
-// Parse allowed CORS origins from CLIENT_URL (supports comma-separated list or *)
-const rawOrigins = process.env.CLIENT_URL || '*';
-const allowedOrigins = rawOrigins.includes(',')
-  ? rawOrigins.split(',').map((url) => url.trim().replace(/\/$/, ''))
-  : rawOrigins === '*'
-  ? '*'
-  : [rawOrigins.trim().replace(/\/$/, '')];
+// Parse allowed CORS origins cleanly:
+// - In production, never reflect arbitrary third-party origins when CLIENT_URL is '*' or unset
+// - Always permit official StudySquad domains, RENDER_EXTERNAL_URL, and any explicit CLIENT_URL/APP_URL entries
+const isProduction = process.env.NODE_ENV === 'production';
+const explicitOrigins = [
+  ...(process.env.CLIENT_URL || '').split(','),
+  process.env.APP_URL || '',
+  process.env.RENDER_EXTERNAL_URL || '',
+]
+  .map((url) => url.trim().replace(/\/$/, ''))
+  .filter((url) => url && url !== '*');
 
-// Setup Socket.io with production-friendly CORS
+const defaultProdOrigins = ['https://studysquadai.com', 'https://www.studysquadai.com'];
+const allowedOriginsSet = new Set(
+  isProduction ? [...defaultProdOrigins, ...explicitOrigins] : explicitOrigins
+);
+
+const isAllowedCorsOrigin = (origin) => {
+  if (!origin) return true; // Same-origin navigations, webhooks, health checks
+  const normalized = origin.trim().replace(/\/$/, '');
+  if (!isProduction) {
+    if (allowedOriginsSet.size === 0 || (process.env.CLIENT_URL || '*') === '*') return true;
+  }
+  return allowedOriginsSet.has(normalized);
+};
+
+const corsOriginDelegate = (origin, callback) => {
+  if (isAllowedCorsOrigin(origin)) {
+    return callback(null, true);
+  }
+  return callback(new Error(`CORS policy blocked access from origin: ${origin}`));
+};
+
+// Setup Socket.io with production-hardened CORS
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: corsOriginDelegate,
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     credentials: true,
   },
@@ -136,12 +161,7 @@ const aiLimiter = rateLimit({
 // CORS
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins === '*' || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`CORS policy blocked access from origin: ${origin}`));
-    },
+    origin: corsOriginDelegate,
     credentials: true,
   })
 );
@@ -435,15 +455,17 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Real-time Chat message (strictly persisted in PostgreSQL before broadcasting)
-  socket.on('send_message', async ({ squadId, userId, content } = {}) => {
-    const effectiveUserId = socket.authUser?.id || userId;
-    if (
-      !squadId ||
-      !effectiveUserId ||
-      typeof content !== 'string' ||
-      !content.trim()
-    ) {
+  // Real-time Chat message (strictly authenticated via JWT & persisted in PostgreSQL before broadcasting)
+  socket.on('send_message', async ({ squadId, content } = {}) => {
+    const effectiveUserId = socket.authUser?.id;
+    if (!effectiveUserId) {
+      socket.emit('message_error', {
+        squadId,
+        error: 'Please sign in to send chat messages.',
+      });
+      return;
+    }
+    if (!squadId || typeof squadId !== 'string' || typeof content !== 'string' || !content.trim()) {
       return;
     }
 
@@ -475,9 +497,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Synced Pomodoro Timer
+  // Synced Pomodoro Timer (authenticated users only)
   socket.on('pomodoro_action', ({ squadId, action, timeLeft, mode } = {}) => {
-    if (!squadId) return;
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     socket.to(squadId).emit('pomodoro_sync', {
       action,
       timeLeft,
@@ -486,11 +508,11 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Collaborative Real-Time Whiteboard: Draw stroke (supports single stroke or batched array)
+  // Collaborative Real-Time Whiteboard: Draw stroke (authenticated users only)
   socket.on('whiteboard_draw', ({ squadId, stroke, strokes: batchStrokes } = {}) => {
-    if (!squadId) return;
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     const incoming = Array.isArray(batchStrokes)
-      ? batchStrokes
+      ? batchStrokes.slice(0, 200)
       : stroke
       ? [stroke]
       : [];
@@ -516,30 +538,31 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Collaborative Real-Time Whiteboard: Clear canvas
+  // Collaborative Real-Time Whiteboard: Clear canvas (authenticated users only)
   socket.on('whiteboard_clear', ({ squadId } = {}) => {
-    if (!squadId) return;
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     squadWhiteboards.delete(squadId);
     socket.to(squadId).emit('whiteboard_clear');
   });
 
-  // Collaborative Real-Time Shared Notes
-  socket.on('notes_update', ({ squadId, notes, userName } = {}) => {
-    if (!squadId || typeof notes !== 'string') return;
+  // Collaborative Real-Time Shared Notes (authenticated users only)
+  socket.on('notes_update', ({ squadId, notes } = {}) => {
+    if (!socket.authUser || !squadId || typeof squadId !== 'string' || typeof notes !== 'string') return;
     socket.to(squadId).emit('notes_sync', {
       notes: notes.slice(0, 100_000),
-      updatedBy: socket.authUser?.name || userName || 'Squad Member',
+      updatedBy: socket.authUser.name || 'Squad Member',
     });
   });
 
-  // Real-Time Study Resource Updates
+  // Real-Time Study Resource Updates (authenticated users only)
   socket.on('resource_action', ({ squadId, action, resource, resourceId } = {}) => {
-    if (!squadId) return;
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     socket.to(squadId).emit('resource_sync', { action, resource, resourceId });
   });
 
-  // Real-Time Study Calendar & Exam Countdown Updates
+  // Real-Time Study Calendar & Exam Countdown Updates (authenticated users only)
   socket.on('calendar_event_action', ({ squadId, action, event, eventId } = {}) => {
+    if (!socket.authUser) return;
     if (squadId) {
       io.to(squadId).emit('calendar_sync', { squadId, action, event, eventId });
       socket.emit('calendar_sync', { squadId, action, event, eventId });
@@ -548,9 +571,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC In-Room Video Call Signaling (uses module-scoped activeVideoRooms)
-  socket.on('join_video_call', ({ squadId, user, initialState } = {}) => {
-    if (!squadId) return;
+  // WebRTC In-Room Video Call Signaling (authenticated users only)
+  socket.on('join_video_call', ({ squadId, initialState } = {}) => {
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     const videoRoomKey = `video_${squadId}`;
     socket.join(videoRoomKey);
 
@@ -558,11 +581,10 @@ io.on('connection', (socket) => {
       activeVideoRooms.set(squadId, new Map());
     }
 
-    const resolvedUser = socket.authUser || user;
     const cleanUser = {
-      id: resolvedUser?.id || 'guest-' + socket.id,
-      name: resolvedUser?.name || 'Squad Member',
-      avatar: resolvedUser?.avatar || '',
+      id: socket.authUser.id,
+      name: socket.authUser.name || 'Squad Member',
+      avatar: socket.authUser.avatar || '',
     };
 
     const peerInfo = {
@@ -604,13 +626,13 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Relay WebRTC SDP Offers, Answers, and ICE Candidates between peers
-  socket.on('video_signal_send', ({ to, signal, user } = {}) => {
-    if (!to || !signal) return;
+  // Relay WebRTC SDP Offers, Answers, and ICE Candidates between authenticated peers
+  socket.on('video_signal_send', ({ to, signal } = {}) => {
+    if (!socket.authUser || !to || !signal) return;
     io.to(to).emit('video_signal_receive', {
       from: socket.id,
       signal,
-      user: socket.authUser || user,
+      user: socket.authUser,
     });
   });
 
@@ -618,7 +640,7 @@ io.on('connection', (socket) => {
   socket.on(
     'video_peer_state',
     ({ squadId, audioMuted, videoMuted, isScreenSharing, isHandRaised } = {}) => {
-      if (!squadId) return;
+      if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
       const roomMap = activeVideoRooms.get(squadId);
       if (roomMap && roomMap.has(socket.id)) {
         const prev = roomMap.get(socket.id);
@@ -642,12 +664,12 @@ io.on('connection', (socket) => {
   );
 
   // Relay live emoji reactions in video room
-  socket.on('video_send_reaction', ({ squadId, emoji, userName } = {}) => {
-    if (!squadId || !emoji) return;
+  socket.on('video_send_reaction', ({ squadId, emoji } = {}) => {
+    if (!socket.authUser || !squadId || typeof squadId !== 'string' || !emoji) return;
     io.to(`video_${squadId}`).emit('video_receive_reaction', {
       id: 'reaction-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
       emoji: String(emoji).slice(0, 8),
-      userName: socket.authUser?.name || userName || 'Squad Mate',
+      userName: socket.authUser.name || 'Squad Mate',
       socketId: socket.id,
     });
   });
