@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { squadsAPI, aiAPI, getFileUrl } from "../api/client";
+import RichMarkdown from "./RichMarkdown";
 
 function parseGitHubRepo(url) {
   try {
@@ -566,7 +567,11 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
                     </button>
                   </div>
                 )}
-                <div className="whitespace-pre-line">{m.content}</div>
+                {m.role === 'assistant' ? (
+                  <RichMarkdown content={m.content} theme="violet" />
+                ) : (
+                  <div className="whitespace-pre-line">{m.content}</div>
+                )}
               </div>
             </div>
           ))}

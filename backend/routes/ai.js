@@ -505,6 +505,7 @@ Each flashcard MUST have:
 - "front": A clear, thought-provoking question, formula, or concept challenge.
 - "back": A clear, concise, memorable explanation, definition, or solution.
 - "tag": A 1-2 word concept tag (e.g. "Algorithm", "Theorem", "Syntax", "Core Concept").
+Use clean readable Unicode math (e.g. O(n log n), n², ≤, ≥, →, ∞, √n) instead of raw LaTeX backslash commands.
 
 Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fence, only raw JSON:
 [
@@ -685,6 +686,7 @@ Each question MUST have:
 - "options": Array of 4 plausible answer choices.
 - "answerIndex": 0-based integer index of the correct answer (0, 1, 2, or 3).
 - "explanation": 1-2 sentence explanation of why the correct option is right.
+Use clean readable Unicode math (e.g. O(n log n), n², ≤, ≥, →, ∞, √n) instead of raw LaTeX backslash commands.
 
 Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fence, only raw JSON:
 [
@@ -944,7 +946,7 @@ ${safeNotes ? `Relevant notes from squad session:\n"""\n${safeNotes.slice(0, 800
 Guidelines for your response:
 1. **Answer whatever the student asks directly**: Whether it is a deep algorithmic breakdown, a quick math equation, a conceptual explanation, a code review, or casual dialogue, answer thoroughly, accurately, and immediately without deflection.
 2. **Talk like a friendly, high-caliber ChatGPT tutor**: Be conversational, encouraging, natural, and engaging. Never sound like a stiff textbook, a corporate robot, or a multiple-choice machine.
-3. **Clarity & Formatting**: Use bolding for key terms, step-by-step explanations, code blocks with syntax highlighting, and everyday analogies to make hard ideas click instantly.
+3. **Clarity & Formatting**: Use bolding for key terms, step-by-step explanations, code blocks with syntax highlighting, and everyday analogies to make hard ideas click instantly. Write math formulas using clean readable Unicode (like O(n log n), n², ≤, ≥, →, ⇒, ∞, √n) instead of raw LaTeX backslash syntax where practical.
 4. **Natural check-in**: End with a warm, genuine check-in (e.g. "Does that make sense, or would you like to see another quick example?") instead of a robotic menu.
 5. **Visual & Screenshot Analysis**: If an image or screenshot is attached, carefully inspect its visual content (equations, code, diagrams, problem text, slides, or questions) and provide a comprehensive, step-by-step breakdown and solution.`;
     }
@@ -1455,7 +1457,7 @@ Subject: "${subject}"
 Topic: "${topic}"
 ${notes ? `Squad Context Notes:\n"${notes.slice(0, 2000)}"` : ''}
 
-Format cleanly in Markdown with bold headers, bullet points, and code/math snippets:
+Format cleanly in Markdown with bold headers, bullet points, and clear code/math snippets:
 # ⚡ ${topic.toUpperCase()} — 1-PAGE HIGH-YIELD CHEAT SHEET
 ### 📌 1. Essential Formulas & Time/Space Complexities
 ### 🔑 2. Core Invariants & Must-Remember Definitions
@@ -1463,7 +1465,7 @@ Format cleanly in Markdown with bold headers, bullet points, and code/math snipp
 ### ⚠️ 4. Top 5 Deadly Exam Traps & Examiner Gotchas
 ### 🏆 5. Archetype Question Checklist & Solution Blueprints
 
-Make it dense, rigorous, practical, and directly applicable for getting an A+ on exam day.`;
+IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human-readable Unicode (such as O(1), O(n), O(log n), O(n²), O(V + E), 2×, ≤, ≥, →, ⇒, ∞, √n) instead of raw LaTeX backslash commands (never write \\frac, \\lim, \\implies, \\times, or $...$ wrappers). Make it dense, rigorous, practical, and easy to scan on exam day.`;
 
     const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
@@ -1523,6 +1525,8 @@ Subject: "${subject}"
 Level 1: 🧸 ELI5 Analogy (Explain like I'm 5 using an everyday, physical real-world metaphor without technical jargon).
 Level 2: ⚙️ Academic & Technical Mechanics (Rigorous, step-by-step mathematical, algorithmic, or scientific explanation of how it actually works under the hood).
 Level 3: ⚠️ Common Exam Traps & Misconceptions (The 3 most common mistakes students make on exams regarding this topic).
+
+Use clean, human-readable Unicode math (like O(n log n), n², ≤, ≥, →, ∞, √n) instead of raw LaTeX backslash commands.
 
 Respond ONLY with a valid JSON object in this format (no markdown backticks, no code fence):
 {

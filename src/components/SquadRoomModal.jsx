@@ -41,6 +41,8 @@ import { io } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
 import { authAPI, aiAPI, squadsAPI, eventsAPI, getSocketUrl } from '../api/client';
 import LoFiFocusPlayer from './LoFiFocusPlayer';
+import RichMarkdown from './RichMarkdown';
+import { renderInlineAcademicText } from '../lib/inlineAcademic';
 
 function isPlaceholderMeetingUrl(url = '') {
   const trimmed = String(url || '').trim().toLowerCase().replace(/\/+$/, '');
@@ -1368,8 +1370,8 @@ export default function SquadRoomModal({
                           Dismiss
                         </button>
                       </div>
-                      <div className="text-xs text-neutral-200 leading-relaxed whitespace-pre-line max-h-60 overflow-y-auto pr-1">
-                        {aiCopilotResult.text}
+                      <div className="max-h-64 overflow-y-auto pr-1">
+                        <RichMarkdown content={aiCopilotResult.text} theme="violet" />
                       </div>
                     </motion.div>
                   )}
@@ -1612,7 +1614,13 @@ export default function SquadRoomModal({
                                 </span>
                               )}
                             </div>
-                            <div className="whitespace-pre-line">{msg.content}</div>
+                            {isMe ? (
+                              <div className="whitespace-pre-line">
+                                {renderInlineAcademicText(msg.content, 'emerald')}
+                              </div>
+                            ) : (
+                              <RichMarkdown content={msg.content} theme="cyan" />
+                            )}
                           </div>
                         </motion.div>
                       );

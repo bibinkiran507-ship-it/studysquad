@@ -36,156 +36,8 @@ import {
   X,
 } from 'lucide-react';
 import { aiAPI, squadsAPI } from '../api/client';
-
-function renderInlineText(text) {
-  if (!text) return text;
-  const parts = [];
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.substring(lastIndex, match.index));
-    }
-    const token = match[0];
-    if (token.startsWith('**') && token.endsWith('**')) {
-      parts.push(
-        <strong key={key++} className="font-bold text-white">
-          {token.slice(2, -2)}
-        </strong>
-      );
-    } else if (token.startsWith('`') && token.endsWith('`')) {
-      parts.push(
-        <code key={key++} className="px-1.5 py-0.5 rounded-md bg-white/10 text-cyan-300 font-mono text-[11px] sm:text-xs border border-white/10">
-          {token.slice(1, -1)}
-        </code>
-      );
-    } else if (token.startsWith('*') && token.endsWith('*')) {
-      parts.push(
-        <em key={key++} className="italic text-neutral-300">
-          {token.slice(1, -1)}
-        </em>
-      );
-    }
-    lastIndex = regex.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.substring(lastIndex));
-  }
-
-  return parts.length > 0 ? parts : text;
-}
-
-function FormattedChatMessage({ content }) {
-  if (!content) return null;
-
-  const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
-  const segments = [];
-  let lastIdx = 0;
-  let match;
-
-  while ((match = codeBlockRegex.exec(content)) !== null) {
-    if (match.index > lastIdx) {
-      segments.push({ type: 'text', text: content.substring(lastIdx, match.index) });
-    }
-    segments.push({
-      type: 'code',
-      lang: match[1] || 'code',
-      code: match[2].trimEnd(),
-    });
-    lastIdx = codeBlockRegex.lastIndex;
-  }
-
-  if (lastIdx < content.length) {
-    segments.push({ type: 'text', text: content.substring(lastIdx) });
-  }
-
-  return (
-    <div className="space-y-1.5 leading-relaxed text-xs sm:text-sm">
-      {segments.map((seg, i) => {
-        if (seg.type === 'code') {
-          return (
-            <div key={i} className="my-2.5 rounded-xl bg-black/70 border border-white/15 overflow-hidden shadow-inner">
-              <div className="px-3 py-1.5 bg-white/5 border-b border-white/10 flex items-center justify-between text-[11px] text-neutral-400 font-mono">
-                <span className="text-cyan-400 font-semibold">{seg.lang}</span>
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(seg.code)}
-                  className="hover:text-white transition-colors cursor-pointer text-[10px] px-2 py-0.5 rounded bg-white/10"
-                >
-                  Copy
-                </button>
-              </div>
-              <pre className="p-3 text-cyan-300 font-mono text-xs overflow-x-auto whitespace-pre">
-                <code>{seg.code}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        const lines = seg.text.split('\n');
-        return (
-          <div key={i} className="space-y-1">
-            {lines.map((line, lineIdx) => {
-              const trimmed = line.trim();
-              if (!trimmed) {
-                return <div key={lineIdx} className="h-1" />;
-              }
-
-              if (trimmed === '---' || trimmed === '***') {
-                return <hr key={lineIdx} className="my-2 border-white/10" />;
-              }
-
-              if (trimmed.startsWith('### ')) {
-                return (
-                  <h5 key={lineIdx} className="text-white font-bold text-xs sm:text-sm pt-1 text-cyan-200">
-                    {renderInlineText(trimmed.slice(4))}
-                  </h5>
-                );
-              }
-
-              if (trimmed.startsWith('## ') || trimmed.startsWith('# ')) {
-                return (
-                  <h4 key={lineIdx} className="text-white font-bold text-sm sm:text-base pt-1.5 text-cyan-300">
-                    {renderInlineText(trimmed.replace(/^#+\s*/, ''))}
-                  </h4>
-                );
-              }
-
-              if (trimmed.startsWith('• ') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-                return (
-                  <div key={lineIdx} className="flex items-start gap-2 pl-1">
-                    <span className="text-cyan-400 font-bold shrink-0 leading-tight mt-0.5">•</span>
-                    <span className="flex-1 text-neutral-200">{renderInlineText(trimmed.slice(2))}</span>
-                  </div>
-                );
-              }
-
-              const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
-              if (numMatch) {
-                return (
-                  <div key={lineIdx} className="flex items-start gap-2 pl-1">
-                    <span className="text-cyan-400 font-semibold shrink-0 text-[11px]">{numMatch[1]}.</span>
-                    <span className="flex-1 text-neutral-200">{renderInlineText(numMatch[2])}</span>
-                  </div>
-                );
-              }
-
-              return (
-                <p key={lineIdx} className="text-neutral-200">
-                  {renderInlineText(line)}
-                </p>
-              );
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+import RichMarkdown from './RichMarkdown';
+import { renderInlineAcademicText } from '../lib/inlineAcademic';
 
 function isPaywallError(err) {
   return (
@@ -2092,7 +1944,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       </div>
 
                       <h3 className="text-lg sm:text-2xl font-bold text-white leading-relaxed mt-4">
-                        {currentCard?.front}
+                        {renderInlineAcademicText(currentCard?.front, 'emerald')}
                       </h3>
                     </div>
 
@@ -2117,7 +1969,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       </div>
 
                       <p className="text-sm sm:text-base font-normal text-neutral-200 leading-relaxed mt-2 whitespace-pre-line">
-                        {currentCard?.back}
+                        {renderInlineAcademicText(currentCard?.back, 'emerald')}
                       </p>
                     </div>
 
@@ -2218,7 +2070,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       Question {currentQuizIndex + 1}
                     </span>
                     <h3 className="text-base sm:text-xl font-bold text-white mt-3 leading-relaxed">
-                      {currentQuestion?.question}
+                      {renderInlineAcademicText(currentQuestion?.question, 'violet')}
                     </h3>
                   </div>
 
@@ -2253,7 +2105,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                             <span className="w-6 h-6 rounded-lg bg-black/40 border border-white/10 flex items-center justify-center text-[11px] font-bold text-neutral-300 shrink-0">
                               {String.fromCharCode(65 + optIdx)}
                             </span>
-                            <span>{option}</span>
+                            <span>{renderInlineAcademicText(option, 'violet')}</span>
                           </div>
 
                           {hasChosen && isCorrect && (
@@ -2279,7 +2131,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                         <span>Concept Explanation</span>
                       </div>
                       <p className="text-xs text-neutral-300 leading-relaxed">
-                        {currentQuestion?.explanation}
+                        {renderInlineAcademicText(currentQuestion?.explanation, 'emerald')}
                       </p>
                     </motion.div>
                   )}
@@ -2501,7 +2353,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                         </div>
                       )}
                       <div className="break-words select-text">
-                        {isUser ? msg.text : <FormattedChatMessage content={msg.text} />}
+                        {isUser ? msg.text : <RichMarkdown content={msg.text} theme="cyan" />}
                       </div>
 
                       {!isUser && (
@@ -2807,7 +2659,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                         </div>
                       ) : (
                         <h4 className="text-lg font-bold text-white leading-relaxed">
-                          "{vivaQuestion}"
+                          "{renderInlineAcademicText(vivaQuestion, 'cyan')}"
                         </h4>
                       )}
                     </div>
@@ -2866,12 +2718,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       </div>
 
                       <p className="text-xs text-neutral-300 leading-relaxed">
-                        <strong>Critique:</strong> {vivaFeedback.feedback}
+                        <strong>Critique:</strong> {renderInlineAcademicText(vivaFeedback.feedback, 'amber')}
                       </p>
 
                       <div className="pt-2 border-t border-white/10">
                         <p className="text-xs text-emerald-300/90 leading-relaxed">
-                          <strong>Model Answer:</strong> {vivaFeedback.modelAnswer}
+                          <strong>Model Answer:</strong> {renderInlineAcademicText(vivaFeedback.modelAnswer, 'emerald')}
                         </p>
                       </div>
                     </motion.div>
@@ -2910,10 +2762,10 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                                   Score: {h.score}/10
                                 </span>
                               </div>
-                              <p className="text-white font-semibold">"{h.question}"</p>
+                              <p className="text-white font-semibold">"{renderInlineAcademicText(h.question, 'cyan')}"</p>
                               <p className="text-neutral-300"><strong>Your Answer:</strong> {h.userResponse}</p>
-                              <p className="text-amber-300/90"><strong>Critique:</strong> {h.feedback}</p>
-                              <p className="text-emerald-300/90"><strong>Model Answer:</strong> {h.modelAnswer}</p>
+                              <p className="text-amber-300/90"><strong>Critique:</strong> {renderInlineAcademicText(h.feedback, 'amber')}</p>
+                              <p className="text-emerald-300/90"><strong>Model Answer:</strong> {renderInlineAcademicText(h.modelAnswer, 'emerald')}</p>
                             </div>
                           ))}
                         </div>
@@ -2991,8 +2843,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
               </div>
 
               {/* Cheat Sheet Rendered Card */}
-              <div className="p-6 rounded-3xl bg-neutral-950 border border-amber-500/30 text-neutral-200 text-xs sm:text-sm leading-relaxed whitespace-pre-line font-mono space-y-3 shadow-2xl overflow-x-auto max-h-[550px] overflow-y-auto">
-                {cheatSheetText}
+              <div className="p-5 sm:p-7 rounded-3xl bg-gradient-to-b from-neutral-950 via-neutral-950 to-neutral-900/95 border border-amber-500/30 text-neutral-200 shadow-2xl overflow-x-auto max-h-[580px] overflow-y-auto">
+                <RichMarkdown content={cheatSheetText} theme="amber" />
               </div>
             </div>
           ) : (
@@ -3103,9 +2955,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                     <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">
                       🧸 Real-World Everyday Metaphor:
                     </p>
-                    <p className="text-sm sm:text-base text-neutral-200 leading-relaxed">
-                      {feynmanResult.eli5}
-                    </p>
+                    <RichMarkdown content={feynmanResult.eli5} theme="amber" className="text-sm sm:text-base" />
                   </div>
                 )}
 
@@ -3114,9 +2964,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                     <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
                       ⚙️ Academic & Technical Under-The-Hood Mechanics:
                     </p>
-                    <p className="text-sm sm:text-base text-neutral-200 leading-relaxed font-mono whitespace-pre-line">
-                      {feynmanResult.mechanics}
-                    </p>
+                    <RichMarkdown content={feynmanResult.mechanics} theme="cyan" className="text-sm sm:text-base" />
                   </div>
                 )}
 
@@ -3129,7 +2977,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       {feynmanResult.examTraps?.map((trap, idx) => (
                         <li key={idx} className="flex items-start gap-2.5 text-xs sm:text-sm text-neutral-300">
                           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                          <span>{trap}</span>
+                          <span>{renderInlineAcademicText(trap, 'amber')}</span>
                         </li>
                       ))}
                     </ul>
@@ -3140,7 +2988,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 {feynmanResult.oneLineTakeaway && (
                   <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-300 flex items-center gap-2">
                     <Lightbulb className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span><strong>Takeaway:</strong> {feynmanResult.oneLineTakeaway}</span>
+                    <span>
+                      <strong>Takeaway:</strong> {renderInlineAcademicText(feynmanResult.oneLineTakeaway, 'cyan')}
+                    </span>
                   </div>
                 )}
               </div>
@@ -3263,7 +3113,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                 {/* Critique */}
                 <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
-                  <strong>Architectural Critique:</strong> {auditResult.critique}
+                  <strong>Architectural Critique:</strong> {renderInlineAcademicText(auditResult.critique, 'cyan')}
                 </p>
 
                 {/* Edge Cases */}
@@ -3277,7 +3127,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       {auditResult.edgeCases.map((ec, idx) => (
                         <li key={idx} className="flex items-start gap-2">
                           <span className="text-amber-400">•</span>
-                          <span>{ec}</span>
+                          <span>{renderInlineAcademicText(ec, 'amber')}</span>
                         </li>
                       ))}
                     </ul>
