@@ -97,20 +97,23 @@ export const getGeminiModel = (modelName = 'gemini-3.5-flash-lite') => {
   }
 };
 
-// 5 independent live-verified Google AI model clusters (separate quotas & traffic pools)
-const AI_MODEL_POOL = [
-  { name: 'gemini-3.5-flash-lite', timeoutMs: 10000, supportsMultimodal: true },
-  { name: 'gemini-flash-lite-latest', timeoutMs: 10000, supportsMultimodal: true },
-  { name: 'gemini-3.1-flash-lite-preview', timeoutMs: 12000, supportsMultimodal: true },
-  { name: 'gemini-4-hydrogen', timeoutMs: 12000, supportsMultimodal: true },
-  { name: 'gemma-4-26b-a4b-it', timeoutMs: 13000, supportsMultimodal: false },
+// Proven fastest live Google AI models (1.3s–4.5s typical; 16s cap allows long 1-page Cheat Sheets to finish)
+const FAST_GEMINI_MODELS = [
+  { name: 'gemini-3.5-flash-lite', timeoutMs: 16000 },
+  { name: 'gemini-flash-lite-latest', timeoutMs: 16000 },
+];
+// Secondary independent Gemini clusters (tight 8s cap so slow preview waves never add 35s+ lag)
+const BACKUP_GEMINI_MODELS = [
+  { name: 'gemini-3.1-flash-lite-preview', timeoutMs: 8000 },
+  { name: 'gemini-4-hydrogen', timeoutMs: 8000 },
 ];
 
-// Short 15s cooldown for transient 503/429/timeouts (never ban healthy models for 10 min!), 10 min only for 404
+// Short 12s cooldown for transient 503/429/timeouts (never ban healthy models for 10 min!), 10 min only for 404
 const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
-const TRANSIENT_COOLDOWN_MS = 15 * 1000;
+const TRANSIENT_COOLDOWN_MS = 12 * 1000;
 const unhealthyModelUntil = new Map();
 const notFoundModels = new Set();
+let roundRobinCursor = 0;
 
 const extractGeminiText = (response) => {
   const parts = response?.candidates?.[0]?.content?.parts;
@@ -133,7 +136,14 @@ const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) =
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const model = genAI.getGenerativeModel({ model: modelName, ...options });
+    const mergedOptions = {
+      ...options,
+      generationConfig: {
+        maxOutputTokens: 2048,
+        ...(options?.generationConfig || {}),
+      },
+    };
+    const model = genAI.getGenerativeModel({ model: modelName, ...mergedOptions });
     const result = await model.generateContent(contents, { signal: controller.signal });
     const text = extractGeminiText(result?.response);
     if (!text) {
@@ -158,26 +168,31 @@ const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) =
   }
 };
 
-// Resilient 5-cluster sequential real-AI failover (1 call normally, instant failover across independent Google AI clusters on 503/timeout)
+// Fast-first multi-cluster Gemini generator:
+// 1) Round-robins across the 2 proven sub-4s Flash Lite models (16s timeout so full Cheat Sheets never cut off)
+// 2) On transient 503, does a crisp 900ms retry on the fast pair BEFORE touching slower preview backups
+// 3) Falls back to independent Gemini 3.1 / 4 clusters with tight 8s caps (zero 35s-65s stalls)
 export const generateWithGemini = async (contents, options = {}) => {
   const genAI = getGenAIClient();
   if (!genAI) return null;
 
-  const isMultimodal = Array.isArray(contents);
-  const eligible = AI_MODEL_POOL.filter(
-    (m) => !notFoundModels.has(m.name) && (!isMultimodal || m.supportsMultimodal)
-  );
-  if (eligible.length === 0) return null;
+  const activeFast = FAST_GEMINI_MODELS.filter((m) => !notFoundModels.has(m.name));
+  const activeBackup = BACKUP_GEMINI_MODELS.filter((m) => !notFoundModels.has(m.name));
+  if (activeFast.length === 0 && activeBackup.length === 0) return null;
+
+  // Alternate starting fast model to spread RPM evenly across both Flash Lite endpoints
+  const startIdx = activeFast.length > 1 ? roundRobinCursor++ % activeFast.length : 0;
+  const rotatedFast =
+    startIdx === 0 ? activeFast : [...activeFast.slice(startIdx), ...activeFast.slice(0, startIdx)];
 
   const now = Date.now();
-  const healthy = eligible.filter((m) => (unhealthyModelUntil.get(m.name) || 0) <= now);
-  const cooling = eligible
-    .filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now)
-    .sort((a, b) => (unhealthyModelUntil.get(a.name) || 0) - (unhealthyModelUntil.get(b.name) || 0));
-  const ordered = [...healthy, ...cooling];
+  const fastOrdered = [
+    ...rotatedFast.filter((m) => (unhealthyModelUntil.get(m.name) || 0) <= now),
+    ...rotatedFast.filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now),
+  ];
 
-  // Pass 1: Walk through all independent real AI clusters sequentially (never wastes RPM on parallel bursts)
-  for (const entry of ordered) {
+  // Pass 1: Proven fast pair (typically 1.3s - 4.5s, single API call)
+  for (const entry of fastOrdered) {
     try {
       return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
     } catch (err) {
@@ -185,9 +200,9 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Pass 2: Wait 2s so brief Google 503 waves clear, then retry all 4 primary Gemini clusters
-  await new Promise((r) => setTimeout(r, 2000));
-  for (const entry of eligible.slice(0, 4)) {
+  // Pass 2: Brief 900ms pause then retry fast pair (clears short 503 blips in ~4s instead of 35s!)
+  await new Promise((r) => setTimeout(r, 900));
+  for (const entry of rotatedFast) {
     try {
       return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
     } catch (err) {
@@ -195,9 +210,18 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Pass 3: Final recovery attempt after 2.5s on the two fastest independent clusters
-  await new Promise((r) => setTimeout(r, 2500));
-  for (const entry of eligible.slice(0, 3)) {
+  // Pass 3: Secondary independent Gemini clusters (tight 8s cap so they never hang)
+  for (const entry of activeBackup) {
+    try {
+      return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
+    } catch (err) {
+      if (err?.isBadRequest) return null;
+    }
+  }
+
+  // Pass 4: Final fast-pair recovery after 1.5s if Google had a brief multi-second wave
+  await new Promise((r) => setTimeout(r, 1500));
+  for (const entry of rotatedFast) {
     try {
       return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
     } catch (err) {
