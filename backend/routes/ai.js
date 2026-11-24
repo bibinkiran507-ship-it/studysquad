@@ -101,9 +101,9 @@ export const getGeminiModel = (modelName = 'gemini-3.5-flash-lite') => {
 const AI_MODEL_POOL = [
   { name: 'gemini-3.5-flash-lite', timeoutMs: 10000, supportsMultimodal: true },
   { name: 'gemini-flash-lite-latest', timeoutMs: 10000, supportsMultimodal: true },
-  { name: 'gemini-4-hydrogen', timeoutMs: 13000, supportsMultimodal: true },
-  { name: 'gemini-3.1-flash-lite-preview', timeoutMs: 13000, supportsMultimodal: true },
-  { name: 'gemma-4-26b-a4b-it', timeoutMs: 14000, supportsMultimodal: false },
+  { name: 'gemini-3.1-flash-lite-preview', timeoutMs: 12000, supportsMultimodal: true },
+  { name: 'gemini-4-hydrogen', timeoutMs: 12000, supportsMultimodal: true },
+  { name: 'gemma-4-26b-a4b-it', timeoutMs: 13000, supportsMultimodal: false },
 ];
 
 // Short 15s cooldown for transient 503/429/timeouts (never ban healthy models for 10 min!), 10 min only for 404
@@ -185,10 +185,19 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Pass 2: Brief pause then 1 clean retry on the top 3 independent clusters in case of a momentary global spike
-  await new Promise((r) => setTimeout(r, 1200));
-  const retryPool = eligible.slice(0, 3);
-  for (const entry of retryPool) {
+  // Pass 2: Wait 2s so brief Google 503 waves clear, then retry all 4 primary Gemini clusters
+  await new Promise((r) => setTimeout(r, 2000));
+  for (const entry of eligible.slice(0, 4)) {
+    try {
+      return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
+    } catch (err) {
+      if (err?.isBadRequest) return null;
+    }
+  }
+
+  // Pass 3: Final recovery attempt after 2.5s on the two fastest independent clusters
+  await new Promise((r) => setTimeout(r, 2500));
+  for (const entry of eligible.slice(0, 3)) {
     try {
       return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
     } catch (err) {
