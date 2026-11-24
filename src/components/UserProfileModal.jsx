@@ -188,7 +188,7 @@ export default function UserProfileModal({ onOpenProModal }) {
 
         {/* Modal */}
         <motion.div
-          className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto bg-white rounded-3xl shadow-2xl"
+          className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden"
           initial={{ scale: 0.9, opacity: 0, y: 20 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -213,7 +213,6 @@ export default function UserProfileModal({ onOpenProModal }) {
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                     onError={(e) => {
-                      e.target.onerror = null;
                       e.target.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`;
                     }}
                   />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, memo } from 'react';
+import React, { useState } from 'react';
 import {
   Video,
   Maximize2,
@@ -19,19 +19,13 @@ function getFallbackMeetingUrl(platform = 'Google Meet') {
   return 'https://meet.google.com/new';
 }
 
-const InRoomVideo = memo(function InRoomVideo({ squad, user }) {
+export default function InRoomVideo({ squad, user }) {
   const [copied, setCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [meetingUrl, setMeetingUrl] = useState(squad.meetingUrl || squad.link || '');
   const [isEditingMeeting, setIsEditingMeeting] = useState(false);
   const [meetingInput, setMeetingInput] = useState(squad.meetingUrl || squad.link || '');
   const [isSavingMeeting, setIsSavingMeeting] = useState(false);
-
-  useEffect(() => {
-    const nextUrl = squad.meetingUrl || squad.link || '';
-    setMeetingUrl(nextUrl);
-    setMeetingInput(nextUrl);
-  }, [squad.id, squad.meetingUrl, squad.link]);
 
   const platformName = squad.platform || 'Google Meet';
   const effectiveMeetingUrl = meetingUrl.trim() || getFallbackMeetingUrl(platformName);
@@ -191,6 +185,4 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user }) {
       </div>
     </div>
   );
-});
-
-export default InRoomVideo;
+}

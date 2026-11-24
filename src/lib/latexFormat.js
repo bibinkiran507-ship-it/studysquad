@@ -212,12 +212,13 @@ export function formatLatexToReadable(raw) {
 
   // Unwrap wrapper commands like \text{...}, \mathrm{...}, \mathbf{...}, \mathbb{...}, \mathcal{...}
   const unwrapCmd =
-    /\\(?:text|textrm|textbf|textit|mathrm|mathbf|mathit|mathbb|mathcal|mathsf|mathtt|operatorname|hat|bar|vec|tilde|overline|underline)\s*\{/;
+    /\\(?:text|textrm|textbf|textit|mathrm|mathbf|mathit|mathbb|mathcal|mathsf|mathtt|operatorname|hat|bar|vec|tilde|overline|underline)\s*\{/g;
   let guard = 0;
-  while (guard < 25) {
+  while (unwrapCmd.test(s) && guard < 20) {
+    guard++;
+    unwrapCmd.lastIndex = 0;
     const m = unwrapCmd.exec(s);
     if (!m) break;
-    guard++;
     const braceStart = m.index + m[0].length - 1;
     const grp = readBraceGroup(s, braceStart);
     if (!grp) break;

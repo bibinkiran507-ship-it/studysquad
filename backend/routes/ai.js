@@ -19,17 +19,11 @@ const LATEX_ESCAPE_COLLISION_RE =
 
 export const cleanJson = (text) => {
   if (!text) return '';
-  let cleaned = String(text).trim();
-  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced && fenced[1]) {
-    cleaned = fenced[1].trim();
-  } else {
-    cleaned = cleaned
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/, '')
-      .replace(/```\s*$/, '')
-      .trim();
-  }
+  const cleaned = String(text)
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/, '')
+    .replace(/```\s*$/, '')
+    .trim();
 
   const firstBrace = cleaned.indexOf('{');
   const firstBracket = cleaned.indexOf('[');
@@ -56,41 +50,29 @@ export const cleanJson = (text) => {
   return latexProtected.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 };
 
-const parseGeminiJson = (rawText) => {
-  if (!rawText) return null;
-  const trimmed = String(rawText).trim();
-  // Fast path: native JSON mode usually returns already-valid JSON (avoid mutating code escapes like \t)
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // Continue to sanitization fallback
-  }
-  const cleaned = cleanJson(trimmed);
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    return JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
-  }
-};
-
-// Singleton GoogleGenerativeAI client (avoids per-request re-instantiation)
-let cachedGenAI = null;
-let cachedGenAIKey = '';
-const getGenAIClient = () => {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') return null;
-  if (!cachedGenAI || cachedGenAIKey !== apiKey) {
-    cachedGenAI = new GoogleGenerativeAI(apiKey);
-    cachedGenAIKey = apiKey;
-  }
-  return cachedGenAI;
-};
+const withTimeout = (promise, ms = 25000) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Gemini request timed out')), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 
 // Helper to initialize Gemini with active model support
 export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
-  const genAI = getGenAIClient();
-  if (!genAI) return null;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
+    return null;
+  }
   try {
+    const genAI = new GoogleGenerativeAI(apiKey.trim());
     return genAI.getGenerativeModel({ model: modelName });
   } catch (err) {
     console.error('Error initializing Gemini client:', err);
@@ -98,171 +80,58 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Smart cooldowns: 404 Not Found -> 10 min; transient 429/503/timeout -> 10s (Google demand spikes clear fast!)
-const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
-const TRANSIENT_COOLDOWN_MS = 10 * 1000;
-const HEDGE_DELAY_MS = 2800; // Start secondary fast model only if primary stalls >2.8s (zero extra quota normally)
+// Track models that recently timed out or returned 404/429 so students never hit repeated 20s stalls
+const MODEL_COOLDOWN_MS = 10 * 60 * 1000;
 const unhealthyModelUntil = new Map();
-const notFoundModels = new Set();
 
-// Verified active free-tier fast models (never waste slots on 429 limit=0 models)
-const PRIMARY_FAST_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
-const CANDIDATE_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
-
-const invokeSingleGeminiModel = async (genAI, modelName, contents, modelOptions, timeoutMs, externalSignal) => {
-  const controller = new AbortController();
-  const onExternalAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      const abortErr = new Error('Aborted');
-      abortErr.name = 'AbortError';
-      throw abortErr;
-    }
-    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-  }
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const model = genAI.getGenerativeModel({ model: modelName, ...modelOptions });
-    const result = await model.generateContent(contents, { signal: controller.signal });
-    const text = result?.response?.text ? result.response.text() : '';
-    if (!text) {
-      throw new Error('Empty Gemini response');
-    }
-    unhealthyModelUntil.delete(modelName);
-    return { text, modelName };
-  } catch (err) {
-    const msg = String(err?.message || '');
-    const isExternalAbort = Boolean(externalSignal?.aborted);
-    if (!isExternalAbort) {
-      console.warn(`[Gemini] ${modelName} failed:`, msg.slice(0, 180));
-      const isNotFound = msg.includes('[404 ') || msg.includes('404 Not Found');
-      const isBadRequest = msg.includes('[400 ') || msg.includes('400 Bad Request');
-      if (isBadRequest) {
-        err.isBadRequest = true;
-      } else if (isNotFound) {
-        notFoundModels.add(modelName);
-        unhealthyModelUntil.set(modelName, Date.now() + NOT_FOUND_COOLDOWN_MS);
-      } else {
-        unhealthyModelUntil.set(modelName, Date.now() + TRANSIENT_COOLDOWN_MS);
-      }
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal) {
-      externalSignal.removeEventListener('abort', onExternalAbort);
-    }
-  }
-};
-
-// Resilient hedged multi-model Gemini generator (fast primary + 3.5s staggered hedge + full fallback pool)
+// Resilient multi-model Gemini generator (fast verified models first + cooldown skipping + transient retry)
 export const generateWithGemini = async (contents, options = {}) => {
-  const genAI = getGenAIClient();
-  if (!genAI) return null;
-
-  const { timeoutMs = 15000, ...modelOptions } = options || {};
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
+    return null;
+  }
+  const candidateModels = [
+    'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-flash-latest',
+  ];
   const now = Date.now();
-  const validModels = CANDIDATE_MODELS.filter((m) => !notFoundModels.has(m));
-  const healthy = validModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
-  // If all models hit a brief spike, sort by earliest cooldown expiry so ALL fast models remain available
-  const orderedModels =
-    healthy.length > 0
-      ? [...healthy, ...validModels.filter((m) => !healthy.includes(m))]
-      : [...validModels].sort(
-          (a, b) => (unhealthyModelUntil.get(a) || 0) - (unhealthyModelUntil.get(b) || 0)
-        );
+  const healthy = candidateModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
+  const orderedModels = healthy.length > 0 ? healthy : candidateModels;
+  const genAI = new GoogleGenerativeAI(apiKey.trim());
 
-  // Stage 1: Hedged race across top 2 models (fires #2 immediately if #1 fails or stalls >3.5s)
-  if (orderedModels.length >= 2) {
-    const [primary, secondary] = orderedModels;
-    const raceAbort = new AbortController();
-    let hedgeTimer = null;
-    try {
-      const winner = await new Promise((resolve, reject) => {
-        let settled = false;
-        let failures = 0;
-        let secondaryStarted = false;
-        let badRequestSeen = false;
-
-        const finishSuccess = (res) => {
-          if (settled) return;
-          settled = true;
-          if (hedgeTimer) clearTimeout(hedgeTimer);
-          raceAbort.abort();
-          resolve(res);
-        };
-
-        const startSecondary = () => {
-          if (settled || secondaryStarted) return;
-          secondaryStarted = true;
-          if (hedgeTimer) {
-            clearTimeout(hedgeTimer);
-            hedgeTimer = null;
-          }
-          invokeSingleGeminiModel(genAI, secondary, contents, modelOptions, timeoutMs, raceAbort.signal)
-            .then(finishSuccess)
-            .catch((err) => {
-              if (err?.isBadRequest) badRequestSeen = true;
-              failures++;
-              if (!settled && failures >= 2) {
-                settled = true;
-                const finalErr = new Error('Primary hedged models failed');
-                finalErr.isBadRequest = badRequestSeen;
-                reject(finalErr);
-              }
-            });
-        };
-
-        hedgeTimer = setTimeout(startSecondary, HEDGE_DELAY_MS);
-
-        invokeSingleGeminiModel(genAI, primary, contents, modelOptions, timeoutMs, raceAbort.signal)
-          .then(finishSuccess)
-          .catch((err) => {
-            if (err?.isBadRequest) {
-              settled = true;
-              if (hedgeTimer) clearTimeout(hedgeTimer);
-              raceAbort.abort();
-              reject(err);
-              return;
-            }
-            failures++;
-            if (!secondaryStarted) {
-              startSecondary();
-            } else if (!settled && failures >= 2) {
-              settled = true;
-              reject(err);
-            }
-          });
-      });
-
-      if (winner && winner.text) {
-        return winner;
+  for (const modelName of orderedModels) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName, ...options });
+        const result = await withTimeout(model.generateContent(contents), 18000);
+        const text = result?.response?.text ? result.response.text() : '';
+        if (text) {
+          unhealthyModelUntil.delete(modelName);
+          return { text, modelName };
+        }
+      } catch (err) {
+        const msg = String(err?.message || '');
+        if (
+          attempt === 0 &&
+          (msg.includes('503') || msg.includes('fetch failed') || msg.includes('ResourceExhausted'))
+        ) {
+          await new Promise((r) => setTimeout(r, 400));
+          continue;
+        }
+        if (
+          msg.includes('404') ||
+          msg.includes('429') ||
+          msg.includes('timed out') ||
+          msg.includes('Not Found')
+        ) {
+          unhealthyModelUntil.set(modelName, Date.now() + MODEL_COOLDOWN_MS);
+        }
+        break;
       }
-    } catch (raceErr) {
-      if (hedgeTimer) clearTimeout(hedgeTimer);
-      if (raceErr?.isBadRequest) return null;
     }
   }
-
-  // Stage 2: 2 staggered parallel retries strictly across verified active lite models (recovers from 2-4s Google 503 spikes)
-  const retryModels = PRIMARY_FAST_MODELS.filter((m) => !notFoundModels.has(m));
-  for (const backoffMs of [800, 1800]) {
-    if (retryModels.length === 0) break;
-    await new Promise((r) => setTimeout(r, backoffMs));
-    const burstAbort = new AbortController();
-    try {
-      const winner = await Promise.any(
-        retryModels.map((modelName) =>
-          invokeSingleGeminiModel(genAI, modelName, contents, modelOptions, 10000, burstAbort.signal)
-        )
-      );
-      burstAbort.abort();
-      if (winner && winner.text) return winner;
-    } catch {
-      burstAbort.abort();
-    }
-  }
-
   return null;
 };
 
@@ -281,25 +150,12 @@ router.post('/match', async (req, res) => {
       : [];
     const query = typeof rawBody.query === 'string' ? rawBody.query.slice(0, 300) : '';
 
-    // Fetch active squads from database (bounded & omitting heavy/private sharedNotes)
+    // Fetch active squads from database (bounded for scale)
     const squads = await withRetry(() =>
       prisma.squad.findMany({
         take: 60,
         orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          name: true,
-          category: true,
-          subject: true,
-          description: true,
-          platform: true,
-          meetingUrl: true,
-          schedule: true,
-          maxMembers: true,
-          bannerGradient: true,
-          pinnedMessage: true,
-          ownerId: true,
-          createdAt: true,
+        include: {
           owner: { select: { id: true, name: true, avatar: true } },
           members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
           tasks: true,
@@ -325,7 +181,8 @@ ${JSON.stringify(
     name: s.name,
     category: s.category,
     subject: s.subject,
-    description: String(s.description || '').slice(0, 180),
+    description: s.description,
+    platform: s.platform,
     schedule: s.schedule,
     currentMembers: s.members.length,
     maxMembers: s.maxMembers,
@@ -341,16 +198,12 @@ Respond ONLY with a valid JSON array in this format:
     "reason": "Directly focuses on your selected subjects and offers active evening sessions."
   }
 ]
+No markdown fences, no backticks, only raw JSON.
 `;
 
-      const geminiRes = await generateWithGemini(prompt, {
-        generationConfig: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 1024,
-        },
-      });
+      const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const parsed = parseGeminiJson(geminiRes.text);
+        const parsed = JSON.parse(cleanJson(geminiRes.text));
         if (Array.isArray(parsed)) {
           const matchedSquads = parsed
             .map((m) => {
@@ -455,17 +308,12 @@ Return ONLY a JSON array of 3 string items.
 Example: ["Solve 3 medium DP problems on LeetCode", "Complete mock interview on Graph traversal", "Review time complexity cheat sheet"]
 No extra text or backticks.
 `;
-      const geminiRes = await generateWithGemini(prompt, {
-        generationConfig: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 512,
-        },
-      });
+      const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const goals = parseGeminiJson(geminiRes.text);
+        const goals = JSON.parse(cleanJson(geminiRes.text));
         if (Array.isArray(goals) && goals.length > 0) {
           return res.json({
-            goals: goals.map((g) => String(g || '').trim()).filter(Boolean).slice(0, 5),
+            goals,
             poweredBy: `Google Gemini (${geminiRes.modelName})`,
           });
         }
@@ -624,7 +472,6 @@ No extra text or backticks.
       selectedGoals = fallbackMap.web;
     }
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       goals: selectedGoals,
       poweredBy: 'Curated Study Engine'
@@ -670,29 +517,14 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-      const geminiRes = await generateWithGemini(prompt, {
-        generationConfig: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 2048,
-        },
-      });
+      const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const rawCards = parseGeminiJson(geminiRes.text);
-        if (Array.isArray(rawCards) && rawCards.length > 0) {
-          const cards = rawCards
-            .filter((c) => c && typeof c === 'object' && (c.front || c.question))
-            .map((c, idx) => ({
-              id: String(c.id || `fc-${idx + 1}`),
-              front: String(c.front || c.question || ''),
-              back: String(c.back || c.answer || ''),
-              tag: String(c.tag || 'Concept'),
-            }));
-          if (cards.length > 0) {
-            return res.json({
-              flashcards: cards,
-              poweredBy: `Google Gemini (${geminiRes.modelName})`,
-            });
-          }
+        const cards = JSON.parse(cleanJson(geminiRes.text));
+        if (Array.isArray(cards) && cards.length > 0) {
+          return res.json({
+            flashcards: cards,
+            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+          });
         }
       }
     } catch (geminiErr) {
@@ -820,7 +652,6 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
       ];
     }
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       flashcards: fallbackDeck,
       poweredBy: 'StudySquad Smart Engine',
@@ -868,37 +699,15 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-      const geminiRes = await generateWithGemini(prompt, {
-        generationConfig: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 2048,
-        },
-      });
+      const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const rawQuiz = parseGeminiJson(geminiRes.text);
-        if (Array.isArray(rawQuiz) && rawQuiz.length > 0) {
-          const quiz = rawQuiz
-            .filter((q) => q && typeof q === 'object' && q.question && Array.isArray(q.options) && q.options.length >= 2)
-            .map((q, idx) => {
-              const opts = q.options.slice(0, 4).map((o) => String(o));
-              const ansIdx = Number.isInteger(q.answerIndex) && q.answerIndex >= 0 && q.answerIndex < opts.length
-                ? q.answerIndex
-                : 0;
-              return {
-                id: String(q.id || `q-${idx + 1}`),
-                question: String(q.question),
-                options: opts,
-                answerIndex: ansIdx,
-                explanation: String(q.explanation || 'Review this core principle in your squad notes.'),
-              };
-            });
-          if (quiz.length > 0) {
-            return res.json({
-              quiz,
-              questions: quiz,
-              poweredBy: `Google Gemini (${geminiRes.modelName})`,
-            });
-          }
+        const quiz = JSON.parse(cleanJson(geminiRes.text));
+        if (Array.isArray(quiz) && quiz.length > 0) {
+          return res.json({
+            quiz,
+            questions: quiz,
+            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+          });
         }
       }
     } catch (geminiErr) {
@@ -1053,7 +862,6 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
       ];
     }
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       quiz: fallbackQuiz,
       questions: fallbackQuiz,
@@ -1169,7 +977,6 @@ Guidelines for your response:
         generationConfig: {
           temperature: 0.75,
           topP: 0.95,
-          maxOutputTokens: 2048,
         },
       });
       if (geminiResult && geminiResult.text) {
@@ -1204,12 +1011,22 @@ Guidelines for your response:
         `• **35:00 - 55:00** ✏️ *Pomodoro Sprint 2*: Practice problems & Whiteboard derivations.\n` +
         `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!`;
     } else if (image) {
-      fallbackText = `📸 **Screenshot Received!**\n\nGoogle Gemini Vision is momentarily handling a global traffic spike. Please resend your screenshot in 5 seconds (no AI credit was used!).`;
+      fallbackText = `📸 **Screenshot Received!**\n\nOur visual AI engine is momentarily busy experiencing high student traffic. Please try sending your screenshot again in a few seconds, or type out the equation/question text so I can solve it right away!`;
     } else {
-      fallbackText = `⏳ **Momentary AI Traffic Spike!**\n\nGoogle Gemini is briefly overloaded right this second and couldn't answer **"${safeQuery.slice(0, 120)}"** yet. Please send your message again in **3–5 seconds** — no AI credit was deducted!`;
+      const qLower = safeQuery.toLowerCase();
+      let answerBody = `Great question! When studying **${subject || 'this topic'}**, focus on building an intuitive mental model first before diving into memorization. Try explaining the mechanism in your own words to a squad partner on the Whiteboard.`;
+
+      if (qLower.includes('complexity') || qLower.includes('time') || qLower.includes('space')) {
+        answerBody = `In algorithm analysis, **Time Complexity** measures operations relative to input size \`n\`, while **Space Complexity** measures auxiliary memory. Aim for \`O(1)\` auxiliary space and \`O(n)\` or \`O(n log n)\` time whenever feasible.`;
+      } else if (qLower.includes('pomodoro') || qLower.includes('focus') || qLower.includes('productivity')) {
+        answerBody = `The **Pomodoro Technique** enforces 25 minutes of mono-tasking followed by a 5-minute cognitive reset. Research shows this rhythm preserves focus, reduces fatigue, and improves long-term recall.`;
+      } else if (qLower.includes('test') || qLower.includes('exam') || qLower.includes('quiz')) {
+        answerBody = `For exam prep, **Active Recall** (testing yourself without looking at notes) and **Spaced Repetition** are scientifically proven to be 2–3× more effective than passive highlighting. Try generating flashcards in the **Quiz & Cards** tab!`;
+      }
+
+      fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Tip*: You can also tag \`@ai\` directly in Squad Chat anytime!`;
     }
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       response: fallbackText,
       poweredBy: 'StudySquad Smart Engine',
@@ -1271,7 +1088,6 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       );
     }
 
-    let squadAccessVerified = false;
     if (resourceRecord?.squad) {
       const isAllowed =
         resourceRecord.squad.ownerId === req.user.id ||
@@ -1281,7 +1097,6 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
           error: 'Join this study squad first to analyze its uploaded documents.',
         });
       }
-      squadAccessVerified = true;
     } else if (squadId && typeof squadId === 'string') {
       const sq = await withRetry(() =>
         prisma.squad.findUnique({
@@ -1297,7 +1112,6 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
           error: 'Join this study squad first to analyze its uploaded documents.',
         });
       }
-      if (sq) squadAccessVerified = true;
     }
 
     const effectiveFileUrl = resourceRecord?.url || (typeof fileUrl === 'string' ? fileUrl : '');
@@ -1306,9 +1120,9 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       resourceRecord?.title ||
       'Study Document';
 
-    // Resolve local file path strictly within uploads directory AND only after verified squad access
+    // Resolve local file path strictly within uploads directory (prevent path traversal)
     let localFilePath = null;
-    if (squadAccessVerified && effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
+    if (effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
       const fileNameOnly = path.basename(effectiveFileUrl);
       const uploadsDir = process.env.UPLOADS_DIR
         ? path.resolve(process.env.UPLOADS_DIR)
@@ -1334,17 +1148,16 @@ Instructions:
 3. If the student asks a specific question, answer directly with slide/page/section context where visible.
 4. Format cleanly using Markdown with bullet points, bold terms, and code blocks if relevant.`;
 
-    let attemptedGeminiOnDoc = false;
-    if (localFilePath) {
+    if (localFilePath && fs.existsSync(localFilePath)) {
       try {
         const ext = path.extname(localFilePath).toLowerCase();
-        const stat = await fs.promises.stat(localFilePath);
+        const stat = fs.statSync(localFilePath);
 
         if (stat.size <= 20 * 1024 * 1024) {
           let geminiResult = null;
 
           if (ext === '.pdf' || ['.png', '.jpg', '.jpeg'].includes(ext)) {
-            const fileBuffer = await fs.promises.readFile(localFilePath);
+            const fileBuffer = fs.readFileSync(localFilePath);
             const mimeType =
               ext === '.pdf'
                 ? 'application/pdf'
@@ -1352,19 +1165,15 @@ Instructions:
                 ? 'image/png'
                 : 'image/jpeg';
 
-            attemptedGeminiOnDoc = true;
-            geminiResult = await generateWithGemini(
-              [
-                docPrompt,
-                {
-                  inlineData: {
-                    data: fileBuffer.toString('base64'),
-                    mimeType,
-                  },
+            geminiResult = await generateWithGemini([
+              docPrompt,
+              {
+                inlineData: {
+                  data: fileBuffer.toString('base64'),
+                  mimeType,
                 },
-              ],
-              { generationConfig: { maxOutputTokens: 2048 } }
-            );
+              },
+            ]);
           } else {
             // Office (.pptx, .docx) and text (.txt, .md, .csv, .json) — extract text cleanly!
             const extracted =
@@ -1380,10 +1189,8 @@ Instructions:
             }
 
             if (extracted) {
-              attemptedGeminiOnDoc = true;
               geminiResult = await generateWithGemini(
-                `${docPrompt}\n\nExtracted Document Content:\n"""\n${extracted.slice(0, 50000)}\n"""`,
-                { generationConfig: { maxOutputTokens: 2048 } }
+                `${docPrompt}\n\nExtracted Document Content:\n"""\n${extracted.slice(0, 50000)}\n"""`
               );
             }
           }
@@ -1402,12 +1209,10 @@ Instructions:
     }
 
     // Persisted PostgreSQL text path (survives Render container redeploys!)
-    if (!attemptedGeminiOnDoc && resourceRecord?.extractedText && resourceRecord.extractedText.trim()) {
+    if (resourceRecord?.extractedText && resourceRecord.extractedText.trim()) {
       try {
-        attemptedGeminiOnDoc = true;
         const geminiResult = await generateWithGemini(
-          `${docPrompt}\n\nExtracted Document Content:\n"""\n${resourceRecord.extractedText.slice(0, 50000)}\n"""`,
-          { generationConfig: { maxOutputTokens: 2048 } }
+          `${docPrompt}\n\nExtracted Document Content:\n"""\n${resourceRecord.extractedText.slice(0, 50000)}\n"""`
         );
         if (geminiResult && geminiResult.text) {
           return res.json({
@@ -1422,27 +1227,23 @@ Instructions:
     }
 
     // Topic-level academic fallback if file is an external link or legacy pre-persistence upload
-    if (!attemptedGeminiOnDoc) {
-      try {
-        const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource titled "${effectiveTitle}"${
-          effectiveFileUrl.startsWith('http') ? ` (${effectiveFileUrl})` : ''
-        }.
+    try {
+      const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource titled "${effectiveTitle}"${
+        effectiveFileUrl.startsWith('http') ? ` (${effectiveFileUrl})` : ''
+      }.
 Student's Question: "${cleanQuery}"
 
 Provide a clear, detailed, academically rigorous explanation covering the concepts in "${effectiveTitle}". Format in clean Markdown with key takeaways and bullet points.`;
-        const geminiResult = await generateWithGemini(prompt, {
-          generationConfig: { maxOutputTokens: 2048 },
+      const geminiResult = await generateWithGemini(prompt);
+      if (geminiResult && geminiResult.text) {
+        return res.json({
+          answer: geminiResult.text,
+          fileName: effectiveTitle,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`,
         });
-        if (geminiResult && geminiResult.text) {
-          return res.json({
-            answer: geminiResult.text,
-            fileName: effectiveTitle,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`,
-          });
-        }
-      } catch (err) {
-        console.warn('Gemini fallback text call error:', err.message);
       }
+    } catch (err) {
+      console.warn('Gemini fallback text call error:', err.message);
     }
 
     const ext = effectiveTitle ? path.extname(effectiveTitle).toLowerCase() : '';
@@ -1455,7 +1256,6 @@ Provide a clear, detailed, academically rigorous explanation covering the concep
       `  2. Copy key slide bullets into **Shared Notes** to generate active-recall flashcards.\n` +
       `  3. Sketch tricky diagrams or derivations with teammates on the **Live Whiteboard**.`;
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       answer,
       fileName: effectiveTitle,
@@ -1572,16 +1372,11 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "keyConcept": "Concept tested"
 }`;
 
-    const geminiResult = await generateWithGemini(prompt, {
-      generationConfig: {
-        responseMimeType: 'application/json',
-        maxOutputTokens: 1024,
-      },
-    });
+    const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = parseGeminiJson(geminiResult.text);
-        if (parsed && parsed.nextQuestion) {
+        const parsed = JSON.parse(cleanJson(geminiResult.text));
+        if (parsed.nextQuestion) {
           return res.json({
             ...parsed,
             poweredBy: `Google Gemini (${geminiResult.modelName})`
@@ -1628,7 +1423,6 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     const currentItem = vivaBank[chosenIdx];
     const nextItem = vivaBank[(chosenIdx + 1) % vivaBank.length];
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       score: isFirstQuestion ? null : 8,
       feedback: isFirstQuestion
@@ -1673,11 +1467,7 @@ Format cleanly in Markdown with bold headers, bullet points, and clear code/math
 
 IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human-readable Unicode (such as O(1), O(n), O(log n), O(n²), O(V + E), 2×, ≤, ≥, →, ⇒, ∞, √n) instead of raw LaTeX backslash commands (never write \\frac, \\lim, \\implies, \\times, or $...$ wrappers). Make it dense, rigorous, practical, and easy to scan on exam day.`;
 
-    const geminiResult = await generateWithGemini(prompt, {
-      generationConfig: {
-        maxOutputTokens: 3072,
-      },
-    });
+    const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       return res.json({
         cheatSheet: geminiResult.text,
@@ -1709,7 +1499,6 @@ IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human
       `[ ] Sliding Window with Dynamic Frequency Map\n` +
       `[ ] DFS / BFS Matrix Traversal with Visited Set`;
 
-    res.locals.aiUsedFallback = true;
     return res.json({
       cheatSheet: fallbackSheet,
       poweredBy: 'StudySquad Curated CheatSheet Engine'
@@ -1748,35 +1537,27 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "oneLineTakeaway": "Memorable one-line summary..."
 }`;
 
-    const geminiResult = await generateWithGemini(prompt, {
-      generationConfig: {
-        responseMimeType: 'application/json',
-        maxOutputTokens: 1536,
-      },
-    });
+    const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = parseGeminiJson(geminiResult.text);
-        if (parsed && (parsed.eli5 || parsed.mechanics)) {
-          const examTraps = Array.isArray(parsed.examTraps)
-            ? parsed.examTraps.map((t) => String(t))
-            : parsed.examTraps
-            ? [String(parsed.examTraps)]
-            : [];
-          return res.json({
-            ...parsed,
-            concept: String(parsed.concept || concept.trim()),
-            examTraps,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
-          });
+        const cleaned = cleanJson(geminiResult.text);
+        let parsed;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch {
+          // If strict parse failed due to unescaped internal raw line breaks, normalize them
+          parsed = JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
         }
+        return res.json({
+          ...parsed,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`
+        });
       } catch (parseErr) {
         console.warn('Gemini feynman JSON parse failed:', parseErr.message);
       }
     }
 
     // Heuristic Fallback
-    res.locals.aiUsedFallback = true;
     return res.json({
       concept: concept.trim(),
       eli5: `Think of ${concept} like a smart organizer in a busy kitchen: instead of searching through every single pantry shelf every time an order comes in, the chef keeps a labeled quick-access rack where the most common ingredients are right in reach!`,
@@ -1830,34 +1611,20 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "keyAdvice": "Key takeaway advice..."
 }`;
 
-    const geminiResult = await generateWithGemini(prompt, {
-      generationConfig: {
-        responseMimeType: 'application/json',
-        maxOutputTokens: 2048,
-      },
-    });
+    const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = parseGeminiJson(geminiResult.text);
-        if (parsed && typeof parsed === 'object' && parsed.status) {
-          const edgeCases = Array.isArray(parsed.edgeCases)
-            ? parsed.edgeCases.map((ec) => String(ec))
-            : parsed.edgeCases
-            ? [String(parsed.edgeCases)]
-            : [];
-          return res.json({
-            ...parsed,
-            edgeCases,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
-          });
-        }
+        const parsed = JSON.parse(cleanJson(geminiResult.text));
+        return res.json({
+          ...parsed,
+          poweredBy: `Google Gemini (${geminiResult.modelName})`
+        });
       } catch (parseErr) {
         console.warn('Gemini code audit parse failed:', parseErr.message);
       }
     }
 
     // Heuristic Fallback
-    res.locals.aiUsedFallback = true;
     return res.json({
       status: 'Suboptimal',
       timeComplexity: 'O(n) - Single pass loop',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Volume2, VolumeX, Play, Pause, Music, CloudRain, Wind, Brain, Sparkles } from 'lucide-react';
 
 // Preset sound modes
@@ -43,7 +43,7 @@ const SOUND_MODES = [
   },
 ];
 
-const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
+export default function LoFiFocusPlayer({ className = '' }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedMode, setSelectedMode] = useState(SOUND_MODES[0].id);
   const [volume, setVolume] = useState(0.5);
@@ -51,13 +51,11 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [usingSynthFallback, setUsingSynthFallback] = useState(false);
 
-  // Audio nodes & lifecycle guards (prevents zombie AudioContext after Pause or Modal Close)
+  // Audio nodes & references
   const audioElRef = useRef(null);
   const audioCtxRef = useRef(null);
   const gainNodeRef = useRef(null);
   const synthNodesRef = useRef([]);
-  const isMountedRef = useRef(true);
-  const isPlayingRef = useRef(false);
 
   // Initialize or resume AudioContext
   const getAudioContext = () => {
@@ -174,7 +172,6 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
       audioElRef.current.volume = isMuted ? 0 : volume;
 
       const fallbackToLocalSynth = () => {
-        if (!isMountedRef.current || !isPlayingRef.current) return;
         try {
           audioElRef.current?.pause();
         } catch {
@@ -186,7 +183,6 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
 
       audioElRef.current.onerror = fallbackToLocalSynth;
       audioElRef.current.play().catch((err) => {
-        if (!isMountedRef.current || !isPlayingRef.current || err?.name === 'AbortError') return;
         console.warn('External stream unavailable, activating local ambient synth:', err?.message);
         fallbackToLocalSynth();
       });
@@ -205,21 +201,14 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
     }
   };
 
-  // Stop everything cleanly (also releases radio stream connection)
+  // Stop everything
   const stopAllSound = () => {
-    isPlayingRef.current = false;
     if (audioElRef.current) {
       audioElRef.current.onerror = null;
       audioElRef.current.pause();
-      audioElRef.current.removeAttribute('src');
-      try {
-        audioElRef.current.load();
-      } catch {
-        // ignore
-      }
     }
     stopSynthesizers();
-    if (isMountedRef.current) setUsingSynthFallback(false);
+    setUsingSynthFallback(false);
   };
 
   // Handle play / pause toggle
@@ -228,7 +217,6 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
       stopAllSound();
       setIsPlaying(false);
     } else {
-      isPlayingRef.current = true;
       setIsPlaying(true);
       const mode = SOUND_MODES.find((m) => m.id === selectedMode) || SOUND_MODES[0];
       playMode(mode);
@@ -271,11 +259,8 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
 
   // Cleanup on unmount
   useEffect(() => {
-    isMountedRef.current = true;
     return () => {
-      isMountedRef.current = false;
       stopAllSound();
-      audioElRef.current = null;
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         try {
           audioCtxRef.current.close();
@@ -283,8 +268,6 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
           // ignore
         }
       }
-      audioCtxRef.current = null;
-      gainNodeRef.current = null;
     };
   }, []);
 
@@ -426,6 +409,4 @@ const LoFiFocusPlayer = memo(function LoFiFocusPlayer({ className = '' }) {
       )}
     </div>
   );
-});
-
-export default LoFiFocusPlayer;
+}

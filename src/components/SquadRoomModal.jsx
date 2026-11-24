@@ -84,7 +84,6 @@ export default function SquadRoomModal({
   onToggleTask,
   onAddTask,
   globalPresence = {},
-  initialLiveUsers = null,
   onLeaveSquad,
   onOpenProModal,
   sharedSocket = null,
@@ -176,13 +175,10 @@ export default function SquadRoomModal({
   }, [isOpen, squad?.id]);
 
   // Real-time Live Users in this room (from socket presence)
-  const [liveUsers, setLiveUsers] = useState(() =>
-    Array.isArray(initialLiveUsers) ? initialLiveUsers : []
-  );
+  const [liveUsers, setLiveUsers] = useState([]);
 
   // Real-time Chat State & History Persistence
   const [messages, setMessages] = useState(squad?.messages || []);
-  const [chatError, setChatError] = useState('');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [chatSavedToast, setChatSavedToast] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
@@ -226,14 +222,12 @@ export default function SquadRoomModal({
   const [promotingUser, setPromotingUser] = useState(null);
   const isOwner = user && (squad?.ownerId === user.id || squad?.owner?.id === user.id);
 
-  // Sync liveUsers from initialLiveUsers or globalPresence fallback
+  // Sync liveUsers from globalPresence (updates from App's background socket)
   useEffect(() => {
-    if (Array.isArray(initialLiveUsers) && initialLiveUsers.length > 0) {
-      setLiveUsers((prev) => (prev.length === 0 ? initialLiveUsers : prev));
-    } else if (squad?.id && globalPresence[squad.id]) {
+    if (squad?.id && globalPresence[squad.id]) {
       setLiveUsers(globalPresence[squad.id].users || []);
     }
-  }, [initialLiveUsers, globalPresence, squad?.id]);
+  }, [globalPresence, squad?.id]);
 
   // Reset persistent heavy tabs whenever modal closes or switches to a different squad
   useEffect(() => {
@@ -352,49 +346,37 @@ export default function SquadRoomModal({
       }
     };
 
-    const seenMessageIds = new Set();
     const handleReceiveMessage = (msg) => {
-      if (msg.id) {
-        if (seenMessageIds.has(msg.id)) return;
-        seenMessageIds.add(msg.id);
-      }
-      setChatError('');
       setMessages((prev) => {
         if (msg.id && prev.some((m) => m.id === msg.id)) {
           return prev;
         }
+        // If user is not on the Chat tab, increment unread badge and play chime
+        if (activeTabRef.current !== 'chat' && msg.userId !== userRef.current?.id) {
+          setUnreadCount((c) => c + 1);
+          try {
+            if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+              audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioCtxRef.current;
+            if (ctx.state === 'suspended') ctx.resume();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(soundEnabledRef.current ? 0.08 : 0, ctx.currentTime + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.4);
+          } catch {
+            /* audio not available, silently ignore */
+          }
+        }
         return [...prev, msg];
       });
-      // Keep unread counter & WebAudio chime OUTSIDE React state updater (StrictMode-safe!)
-      if (activeTabRef.current !== 'chat' && msg.userId !== userRef.current?.id) {
-        setUnreadCount((c) => c + 1);
-        try {
-          if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-            audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-          }
-          const ctx = audioCtxRef.current;
-          if (ctx.state === 'suspended') ctx.resume();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.frequency.setValueAtTime(880, ctx.currentTime);
-          osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
-          gain.gain.setValueAtTime(0, ctx.currentTime);
-          gain.gain.linearRampToValueAtTime(soundEnabledRef.current ? 0.08 : 0, ctx.currentTime + 0.01);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-          osc.start(ctx.currentTime);
-          osc.stop(ctx.currentTime + 0.4);
-        } catch {
-          /* audio not available, silently ignore */
-        }
-      }
-    };
-
-    const handleMessageError = (err) => {
-      if (err?.error) {
-        setChatError(err.error);
-      }
     };
 
     // Live presence: who is currently in this room
@@ -421,7 +403,6 @@ export default function SquadRoomModal({
 
     socketInstance.on('user_joined', handleUserJoined);
     socketInstance.on('receive_message', handleReceiveMessage);
-    socketInstance.on('message_error', handleMessageError);
     socketInstance.on('room_presence_update', handleRoomPresence);
     socketInstance.on('pomodoro_sync', handlePomodoroSync);
 
@@ -429,7 +410,6 @@ export default function SquadRoomModal({
       socketInstance.off('connect', emitJoinRoom);
       socketInstance.off('user_joined', handleUserJoined);
       socketInstance.off('receive_message', handleReceiveMessage);
-      socketInstance.off('message_error', handleMessageError);
       socketInstance.off('room_presence_update', handleRoomPresence);
       socketInstance.off('pomodoro_sync', handlePomodoroSync);
       socketInstance.emit('leave_room', {
@@ -528,7 +508,6 @@ export default function SquadRoomModal({
       content: text,
     };
 
-    setChatError('');
     setInputMessage('');
 
     if (socketRef.current?.connected) {
@@ -542,8 +521,6 @@ export default function SquadRoomModal({
         }
       } catch (err) {
         console.error('Failed to send message via REST fallback:', err);
-        setInputMessage(text);
-        setChatError(err.response?.data?.error || 'Could not send message. Please check your connection and try again.');
       }
     }
   };
@@ -1625,19 +1602,6 @@ export default function SquadRoomModal({
 
                   <div ref={messagesEndRef} />
                 </div>
-
-                {chatError && (
-                  <div className="px-3.5 py-2 bg-rose-500/15 border-t border-rose-500/30 text-rose-300 text-xs flex items-center justify-between gap-2">
-                    <span>{chatError}</span>
-                    <button
-                      type="button"
-                      onClick={() => setChatError('')}
-                      className="text-rose-200 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
 
                 {/* Message Input Box */}
                 <form

@@ -56,7 +56,7 @@ export function renderInlineAcademicText(text, theme = 'cyan') {
   const palette = ACADEMIC_THEME_STYLES[theme] || ACADEMIC_THEME_STYLES.cyan;
   const parts = [];
   const tokenRegex =
-    /(`[^`\n]+`|\$\$[^$\n]+\$\$|\\\((?:(?!\\\))[^\n])+\\\)|\$(?!\s)(?:[^$\n]*?[^\s$\\])\$(?!\d)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+    /(`[^`\n]+`|\$\$[^$\n]+\$\$|\\\([^)\n]+\\\)|\$(?!\s)(?:[^$\n]*?[^\s$\\])\$(?!\d)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
 
   let lastIndex = 0;
   let match;

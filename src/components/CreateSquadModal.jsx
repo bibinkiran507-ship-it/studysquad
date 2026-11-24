@@ -10,13 +10,12 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
   const [meetingUrl, setMeetingUrl] = useState('')
   const [schedule, setSchedule] = useState('Mon, Wed @ 7:00 PM EST')
   const [description, setDescription] = useState('')
-  const [submitting, setSubmitting] = useState(false)
 
   if (!isOpen) return null
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
-    if (submitting || !name.trim() || !subject.trim()) return
+    if (!name.trim() || !subject.trim()) return
 
     const defaultMeetingUrl =
       platform === 'Google Meet'
@@ -36,13 +35,8 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
       description: description.trim() || 'Collaborative study sessions and problem solving.',
     }
 
-    setSubmitting(true)
-    try {
-      await onCreateSquad(squadData)
-      onClose()
-    } finally {
-      setSubmitting(false)
-    }
+    onCreateSquad(squadData)
+    onClose()
   }
 
   return (
@@ -52,7 +46,7 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-white w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl border border-neutral-100 flex flex-col"
+          className="bg-white w-full max-w-xl rounded-3xl shadow-2xl border border-neutral-100 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div className="px-6 py-5 border-b border-neutral-100 flex items-center justify-between bg-neutral-50/60">

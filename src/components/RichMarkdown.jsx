@@ -7,7 +7,7 @@ function CodeBlock({ lang, code }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard?.writeText(code)?.catch(() => {});
+    navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
@@ -57,7 +57,7 @@ const RichMarkdown = memo(function RichMarkdown({ content, theme = 'cyan', class
     const palette = ACADEMIC_THEME_STYLES[theme] || ACADEMIC_THEME_STYLES.cyan;
     const text = String(content);
 
-    const blockRegex = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```|\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\]/g;
+    const blockRegex = /```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```|\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\]/g;
     const segments = [];
     let lastIdx = 0;
     let match;

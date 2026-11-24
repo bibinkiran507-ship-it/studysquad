@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search,
@@ -88,7 +88,7 @@ function ActiveUsersStrip({ activeUsers = [] }) {
   );
 }
 
-const SquadDirectory = memo(function SquadDirectory({
+export default function SquadDirectory({
   squads,
   onJoinSquad,
   onOpenSquadRoom,
@@ -149,21 +149,16 @@ const SquadDirectory = memo(function SquadDirectory({
     'Research & Thesis',
   ];
 
-  const filteredSquads = useMemo(() => {
-    const q = searchQuery.toLowerCase();
-    return squads.filter((squad) => {
-      const matchesCategory =
-        selectedFilter === 'All' || squad?.category === selectedFilter;
-      if (!matchesCategory) return false;
-      if (!q) return true;
-      return (
-        String(squad?.name || '').toLowerCase().includes(q) ||
-        String(squad?.subject || '').toLowerCase().includes(q) ||
-        String(squad?.description || '').toLowerCase().includes(q) ||
-        String(squad?.category || '').toLowerCase().includes(q)
-      );
-    });
-  }, [squads, selectedFilter, searchQuery]);
+  const filteredSquads = squads.filter((squad) => {
+    const matchesCategory =
+      selectedFilter === 'All' || squad.category === selectedFilter;
+    const matchesSearch =
+      squad.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      squad.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      squad.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      squad.category.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
 
   // Total active students across all squads right now
   const totalActive = Object.values(globalPresence).reduce(
@@ -329,16 +324,17 @@ const SquadDirectory = memo(function SquadDirectory({
             return (
               <motion.div
                 key={squad.id}
-                initial={{ opacity: 0, y: 24 }}
-                whileInView={{ opacity: 1, y: 0 }}
+                layout
+                initial={{ opacity: 0, y: 36, scale: 0.97 }}
+                whileInView={{ opacity: 1, y: 0, scale: 1 }}
                 viewport={{ once: true, margin: '-40px' }}
                 transition={{
-                  duration: 0.4,
-                  delay: (index % 3) * 0.06,
+                  duration: 0.55,
+                  delay: (index % 3) * 0.1,
                   ease: [0.22, 1, 0.36, 1],
                 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                className={`bg-white rounded-3xl border p-6 flex flex-col justify-between transition-shadow duration-200 group relative shadow-md hover:shadow-xl ${
+                exit={{ opacity: 0, scale: 0.95 }}
+                className={`bg-white/95 backdrop-blur-xl rounded-3xl border p-6 flex flex-col justify-between transition-all duration-300 group relative shadow-md hover:shadow-xl hover:bg-white ${
                   isLive
                     ? 'border-emerald-500/60 ring-2 ring-emerald-500/25'
                     : 'border-neutral-200/90'
@@ -490,6 +486,4 @@ const SquadDirectory = memo(function SquadDirectory({
       )}
     </section>
   );
-});
-
-export default SquadDirectory;
+}

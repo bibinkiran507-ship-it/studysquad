@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authAPI } from '../api/client';
 
 const AuthContext = createContext(null);
@@ -18,7 +18,7 @@ export const AuthProvider = ({ children }) => {
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register' | 'forgot'
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
-  const saveUserSession = useCallback((newUser, newToken) => {
+  const saveUserSession = (newUser, newToken) => {
     if (newToken) {
       localStorage.setItem('studysquad_token', newToken);
       setToken(newToken);
@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('studysquad_user', JSON.stringify(newUser));
       setUser(newUser);
     }
-  }, []);
+  };
 
   // Sync / verify user profile on startup if token exists
   useEffect(() => {
@@ -58,25 +58,25 @@ export const AuthProvider = ({ children }) => {
       }
     };
     fetchUser();
-  }, [saveUserSession]);
+  }, []);
 
-  const login = useCallback(async (email, password) => {
+  const login = async (email, password) => {
     const res = await authAPI.login(email, password);
     const { token: newToken, user: newUser } = res.data;
     saveUserSession(newUser, newToken);
     setIsAuthModalOpen(false);
     return newUser;
-  }, [saveUserSession]);
+  };
 
-  const register = useCallback(async (name, email, password) => {
+  const register = async (name, email, password) => {
     const res = await authAPI.register(name, email, password);
     const { token: newToken, user: newUser } = res.data;
     saveUserSession(newUser, newToken);
     setIsAuthModalOpen(false);
     return newUser;
-  }, [saveUserSession]);
+  };
 
-  const loginWithGoogle = useCallback(async (googleUserData) => {
+  const loginWithGoogle = async (googleUserData) => {
     try {
       const res = await authAPI.googleLogin(googleUserData);
       const { token: newToken, user: newUser } = res.data;
@@ -105,16 +105,16 @@ export const AuthProvider = ({ children }) => {
       setIsAuthModalOpen(false);
       return fallbackUser;
     }
-  }, [saveUserSession]);
+  };
 
-  const logout = useCallback(() => {
+  const logout = () => {
     localStorage.removeItem('studysquad_token');
     localStorage.removeItem('studysquad_user');
     setToken(null);
     setUser(null);
-  }, []);
+  };
 
-  const updateProfile = useCallback(async (data) => {
+  const updateProfile = async (data) => {
     const res = await authAPI.updateMe(data);
     setUser((prev) => {
       const merged = { ...(prev || {}), ...(res.data?.user || {}) };
@@ -126,9 +126,9 @@ export const AuthProvider = ({ children }) => {
       return merged;
     });
     return res.data.user;
-  }, []);
+  };
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = async () => {
     try {
       const res = await authAPI.getMe();
       if (res.data?.user) {
@@ -139,63 +139,43 @@ export const AuthProvider = ({ children }) => {
       console.warn('Failed to refresh user profile:', err);
       return null;
     }
-  }, [saveUserSession]);
+  };
 
-  const openAuthModal = useCallback((mode = 'login') => {
+  const openAuthModal = (mode = 'login') => {
     setAuthMode(mode);
     setIsAuthModalOpen(true);
-  }, []);
+  };
 
-  const closeAuthModal = useCallback(() => {
+  const closeAuthModal = () => {
     setIsAuthModalOpen(false);
-  }, []);
+  };
 
-  const openProfile = useCallback(() => setIsProfileOpen(true), []);
-  const closeProfile = useCallback(() => setIsProfileOpen(false), []);
-
-  const value = useMemo(
-    () => ({
-      user,
-      setUser,
-      token,
-      loading,
-      isAuthModalOpen,
-      authMode,
-      isProfileOpen,
-      login,
-      register,
-      loginWithGoogle,
-      logout,
-      updateProfile,
-      refreshUser,
-      openAuthModal,
-      closeAuthModal,
-      setAuthMode,
-      openProfile,
-      closeProfile,
-    }),
-    [
-      user,
-      token,
-      loading,
-      isAuthModalOpen,
-      authMode,
-      isProfileOpen,
-      login,
-      register,
-      loginWithGoogle,
-      logout,
-      updateProfile,
-      refreshUser,
-      openAuthModal,
-      closeAuthModal,
-      openProfile,
-      closeProfile,
-    ]
-  );
+  const openProfile = () => setIsProfileOpen(true);
+  const closeProfile = () => setIsProfileOpen(false);
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider
+      value={{
+        user,
+        setUser,
+        token,
+        loading,
+        isAuthModalOpen,
+        authMode,
+        isProfileOpen,
+        login,
+        register,
+        loginWithGoogle,
+        logout,
+        updateProfile,
+        refreshUser,
+        openAuthModal,
+        closeAuthModal,
+        setAuthMode,
+        openProfile,
+        closeProfile,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

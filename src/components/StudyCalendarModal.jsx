@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Calendar as CalendarIcon,
@@ -19,7 +19,6 @@ import {
 } from 'lucide-react';
 import { eventsAPI } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import RichMarkdown from './RichMarkdown';
 
 // Format YYYY-MM-DD in the student's local timezone (avoids UTC/IST off-by-1-day bug)
 function formatLocalDateInput(d = new Date()) {
@@ -324,10 +323,8 @@ export default function StudyCalendarModal({
     }
   };
 
-  // Generate AI Exam Plan (stale-response guarded)
-  const aiPlanRequestIdRef = useRef(0);
+  // Generate AI Exam Plan
   const handleGenerateAiPlan = async (exam) => {
-    const reqId = ++aiPlanRequestIdRef.current;
     setAiPlanModal({ isOpen: true, event: exam, plan: '', loading: true });
     try {
       const target = new Date(exam.date).getTime();
@@ -340,7 +337,6 @@ export default function StudyCalendarModal({
         daysLeft,
       });
 
-      if (reqId !== aiPlanRequestIdRef.current) return;
       setAiPlanModal({
         isOpen: true,
         event: exam,
@@ -348,7 +344,6 @@ export default function StudyCalendarModal({
         loading: false,
       });
     } catch (err) {
-      if (reqId !== aiPlanRequestIdRef.current) return;
       console.error('Error getting AI study plan:', err);
       const isLimit =
         err.response?.status === 403 &&
@@ -381,7 +376,7 @@ export default function StudyCalendarModal({
   // Copy AI Plan
   const handleCopyPlan = () => {
     if (aiPlanModal.plan) {
-      navigator.clipboard?.writeText(aiPlanModal.plan)?.catch(() => {});
+      navigator.clipboard.writeText(aiPlanModal.plan);
       setCopiedPlan(true);
       setTimeout(() => setCopiedPlan(false), 2000);
     }
@@ -1097,7 +1092,7 @@ export default function StudyCalendarModal({
                   </button>
                 </div>
 
-                <div className="p-6 overflow-y-auto flex-1 text-sm text-neutral-200 leading-relaxed space-y-3">
+                <div className="p-6 overflow-y-auto flex-1 text-sm text-neutral-200 leading-relaxed whitespace-pre-line space-y-3">
                   {aiPlanModal.loading ? (
                     <div className="py-16 text-center space-y-3">
                       <div className="w-8 h-8 rounded-full border-2 border-violet-500/30 border-t-violet-400 animate-spin mx-auto" />
@@ -1106,7 +1101,7 @@ export default function StudyCalendarModal({
                       </p>
                     </div>
                   ) : (
-                    <RichMarkdown content={aiPlanModal.plan} theme="violet" />
+                    aiPlanModal.plan
                   )}
                 </div>
 

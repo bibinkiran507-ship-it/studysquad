@@ -194,24 +194,21 @@ function AppInner() {
     }
   }, [squads]);
 
-  // When user clicks "Find Squads" in hero banner: AI Matchmaker (with double-click guard)
-  const isMatchingRef = useRef(false);
+  // When user clicks "Find Squads" in hero banner: AI Matchmaker
   const handleFindSquads = async () => {
-    if (selectedOptions.length > 0 && !isMatchingRef.current) {
-      isMatchingRef.current = true;
+    if (selectedOptions.length > 0) {
       try {
         const res = await aiAPI.matchSquads(selectedOptions, '');
         if (res.data.matches && res.data.matches.length > 0) {
           const matchedIds = new Set(res.data.matches.map((m) => m.id));
-          setSquads((prev) => [...res.data.matches, ...prev.filter((s) => !matchedIds.has(s.id))]);
+          const otherSquads = squads.filter((s) => !matchedIds.has(s.id));
+          setSquads([...res.data.matches, ...otherSquads]);
           setAiPoweredBy(res.data.poweredBy || 'Gemini AI');
           setSelectedFilter('All');
         }
       } catch (err) {
         console.warn('AI matching error, falling back to filter:', err.message);
         setSelectedFilter(selectedOptions[0]);
-      } finally {
-        isMatchingRef.current = false;
       }
     }
 
@@ -240,21 +237,25 @@ function AppInner() {
       setActiveSquadRoom(updatedSquad);
     } catch (err) {
       console.error('Failed to join squad:', err);
-      const target = squads.find((sq) => sq.id === squadId);
-      if (target) {
-        const currentMembers = Array.isArray(target.members) ? target.members : [];
-        const alreadyIn = currentMembers.some((m) => m.id === user.id);
-        const currentCount =
-          typeof target.memberCount === 'number' ? target.memberCount : currentMembers.length;
-        const updated = {
-          ...target,
-          isJoined: true,
-          memberCount: alreadyIn ? currentCount : currentCount + 1,
-          members: alreadyIn ? currentMembers : [...currentMembers, user],
-        };
-        setSquads((prev) => prev.map((sq) => (sq.id === squadId ? updated : sq)));
-        setActiveSquadRoom(updated);
-      }
+      setSquads((prev) =>
+        prev.map((sq) => {
+          if (sq.id === squadId) {
+            const currentMembers = Array.isArray(sq.members) ? sq.members : [];
+            const alreadyIn = currentMembers.some((m) => m.id === user.id);
+            const currentCount =
+              typeof sq.memberCount === 'number' ? sq.memberCount : currentMembers.length;
+            const updated = {
+              ...sq,
+              isJoined: true,
+              memberCount: alreadyIn ? currentCount : currentCount + 1,
+              members: alreadyIn ? currentMembers : [...currentMembers, user],
+            };
+            setActiveSquadRoom(updated);
+            return updated;
+          }
+          return sq;
+        })
+      );
     }
   };
 
@@ -312,15 +313,14 @@ function AppInner() {
       })
     );
 
-    setActiveSquadRoom((prev) => {
-      if (!prev || prev.id !== squadId) return prev;
-      return {
+    if (activeSquadRoom && activeSquadRoom.id === squadId) {
+      setActiveSquadRoom((prev) => ({
         ...prev,
         tasks: (prev.tasks || []).map((t) =>
           t.id === taskId ? { ...t, completed: newCompleted } : t
         ),
-      };
-    });
+      }));
+    }
 
     try {
       await squadsAPI.updateTask(squadId, taskId, { completed: newCompleted });
@@ -352,13 +352,12 @@ function AppInner() {
         })
       );
 
-      setActiveSquadRoom((prev) => {
-        if (!prev || prev.id !== squadId) return prev;
-        return {
+      if (activeSquadRoom && activeSquadRoom.id === squadId) {
+        setActiveSquadRoom((prev) => ({
           ...prev,
           tasks: [...(prev.tasks || []), newTask],
-        };
-      });
+        }));
+      }
     } catch (err) {
       console.warn('API task creation failed, using optimistic task:', err.message);
       const fallbackTask = {
@@ -379,13 +378,12 @@ function AppInner() {
         })
       );
 
-      setActiveSquadRoom((prev) => {
-        if (!prev || prev.id !== squadId) return prev;
-        return {
+      if (activeSquadRoom && activeSquadRoom.id === squadId) {
+        setActiveSquadRoom((prev) => ({
           ...prev,
           tasks: [...(prev.tasks || []), fallbackTask],
-        };
-      });
+        }));
+      }
     }
   };
 
@@ -565,13 +563,12 @@ function AppInner() {
       {activeSquadRoom && (
         <Suspense fallback={null}>
           <SquadRoomModal
-            key={activeSquadRoom.id}
             squad={activeSquadRoom}
             isOpen={!!activeSquadRoom}
             onClose={handleCloseSquadRoom}
             onToggleTask={handleToggleTask}
             onAddTask={handleAddTask}
-            initialLiveUsers={globalPresence[activeSquadRoom.id]?.users}
+            globalPresence={globalPresence}
             onLeaveSquad={handleLeaveSquad}
             onOpenProModal={handleOpenProModal}
             sharedSocket={sharedSocket}

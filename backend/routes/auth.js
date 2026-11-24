@@ -21,13 +21,7 @@ const router = Router();
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SAFE_DATA_IMAGE_REGEX = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i;
 
-let cachedGoogleClient = null;
-const getGoogleClient = () => {
-  if (!cachedGoogleClient) {
-    cachedGoogleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-  }
-  return cachedGoogleClient;
-};
+const getGoogleClient = () => new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Helper to generate JWT
 const generateToken = (userId) => {
@@ -236,7 +230,7 @@ router.post('/google', async (req, res) => {
           audience: allowedClientIds,
         });
         const payload = ticket.getPayload();
-        if (payload?.email_verified !== true) {
+        if (payload?.email_verified === false) {
           return res.status(401).json({ error: 'Your Google account email is not verified.' });
         }
         verifiedEmail = payload?.email;
@@ -251,12 +245,10 @@ router.post('/google', async (req, res) => {
       try {
         const [tokenInfoRes, gRes] = await Promise.all([
           fetch(
-            `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
-            { signal: AbortSignal.timeout(10000) }
+            `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`
           ),
           fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${accessToken}` },
-            signal: AbortSignal.timeout(10000),
           }),
         ]);
 
@@ -286,11 +278,7 @@ router.post('/google', async (req, res) => {
           return res.status(401).json({ error: 'Google token audience mismatch.' });
         }
 
-        const isEmailVerified =
-          profile?.email_verified === true ||
-          tokenInfo?.email_verified === true ||
-          tokenInfo?.email_verified === 'true';
-        if (!isEmailVerified) {
+        if (profile?.email_verified === false || tokenInfo?.email_verified === 'false') {
           return res.status(401).json({ error: 'Your Google account email is not verified.' });
         }
 
@@ -610,8 +598,10 @@ router.post('/reset-password', async (req, res) => {
     const hashedCandidate = hashResetToken(cleanToken);
 
     const resetRecord = await withRetry(() =>
-      prisma.passwordReset.findUnique({
-        where: { token: hashedCandidate },
+      prisma.passwordReset.findFirst({
+        where: {
+          OR: [{ token: hashedCandidate }, { token: cleanToken }],
+        },
       })
     );
 
