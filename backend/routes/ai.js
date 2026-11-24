@@ -168,8 +168,9 @@ const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) =
   }
 };
 
-const GROQ_TEXT_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
-const GROQ_VISION_MODELS = ['meta-llama/llama-4-scout-17b-16e-instruct'];
+// Live-verified Groq models (Nov 2026): 0.4s–2.7s real AI responses
+const GROQ_TEXT_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+const GROQ_VISION_MODELS = ['qwen/qwen3.8-27b'];
 
 export const formatPoweredBy = (aiRes) => {
   if (!aiRes) return 'StudySquad Smart Engine';
@@ -248,7 +249,9 @@ const generateWithGroq = async (contents, options = {}) => {
         continue;
       }
       const data = await res.json();
-      const text = String(data?.choices?.[0]?.message?.content || '').trim();
+      const text = String(data?.choices?.[0]?.message?.content || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .trim();
       if (text) {
         return { text, modelName, provider: 'Groq' };
       }
