@@ -5,6 +5,7 @@
 
 export const DAILY_FREE_LIMIT = 5;
 const PRO_UNLIMITED_NUMERIC = 999999;
+const MAX_DAILY_MAP_SIZE = 10000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // In-memory daily counter: key = `${userId_or_ip}:${YYYY-MM-DD}` -> count
@@ -98,17 +99,21 @@ export const enforceAiLimit = (req, res, next) => {
     });
   }
 
-  // Reserve 1 credit for this request
+  // Reserve 1 credit for this request (bounded map to prevent unbounded memory growth)
   const nextUsed = currentUsed + 1;
+  if (dailyUsageMap.size >= MAX_DAILY_MAP_SIZE && !dailyUsageMap.has(todayKey)) {
+    const oldestKey = dailyUsageMap.keys().next().value;
+    if (oldestKey) dailyUsageMap.delete(oldestKey);
+  }
   dailyUsageMap.set(todayKey, nextUsed);
   res.setHeader('X-Daily-Limit', DAILY_FREE_LIMIT);
   res.setHeader('X-Daily-Used', nextUsed);
   res.setHeader('X-Daily-Remaining', Math.max(0, DAILY_FREE_LIMIT - nextUsed));
 
-  // Refund credit automatically if validation fails or server returns an error
+  // Refund credit automatically if validation fails, server errors, or static fallback was served during Gemini 503 wave
   let refunded = false;
   res.on('finish', () => {
-    if (!refunded && res.statusCode >= 400) {
+    if (!refunded && (res.statusCode >= 400 || res.locals?.aiUsedFallback)) {
       refunded = true;
       const latest = dailyUsageMap.get(todayKey) || 0;
       if (latest > 0) {

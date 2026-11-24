@@ -385,6 +385,7 @@ Format cleanly with Markdown, emojis, and clear bullet points.`;
       `🏆 **Phase 3: Final Polish (Day before Exam)**\n` +
       `• Light formula sheet review and 8 hours of sleep to consolidate long-term memory!`;
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       plan: fallbackPlan,
       poweredBy: 'StudySquad Smart Engine',

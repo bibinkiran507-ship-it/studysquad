@@ -98,71 +98,181 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Smart cooldowns: 404 Not Found -> 10 min; transient 429/503/timeout -> 20s (never starve healthy fast model!)
+// Smart cooldowns: 404 Not Found -> 10 min; transient 429/503/timeout -> 10s (Google demand spikes clear fast!)
 const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
-const TRANSIENT_COOLDOWN_MS = 20 * 1000;
+const TRANSIENT_COOLDOWN_MS = 10 * 1000;
+const HEDGE_DELAY_MS = 3000; // Start secondary fast model only if primary stalls >3s (zero extra quota normally)
 const unhealthyModelUntil = new Map();
+const notFoundModels = new Set();
 
-// Resilient multi-model Gemini generator (fast verified models first + real AbortController + transient retry)
+const CANDIDATE_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
+];
+
+const invokeSingleGeminiModel = async (genAI, modelName, contents, modelOptions, timeoutMs, externalSignal) => {
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      const abortErr = new Error('Aborted');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const model = genAI.getGenerativeModel({ model: modelName, ...modelOptions });
+    const result = await model.generateContent(contents, { signal: controller.signal });
+    const text = result?.response?.text ? result.response.text() : '';
+    if (!text) {
+      throw new Error('Empty Gemini response');
+    }
+    unhealthyModelUntil.delete(modelName);
+    return { text, modelName };
+  } catch (err) {
+    const msg = String(err?.message || '');
+    const isExternalAbort = Boolean(externalSignal?.aborted);
+    if (!isExternalAbort) {
+      console.warn(`[Gemini] ${modelName} failed:`, msg.slice(0, 180));
+      const isNotFound = msg.includes('[404 ') || msg.includes('404 Not Found');
+      const isBadRequest = msg.includes('[400 ') || msg.includes('400 Bad Request');
+      if (isBadRequest) {
+        err.isBadRequest = true;
+      } else if (isNotFound) {
+        notFoundModels.add(modelName);
+        unhealthyModelUntil.set(modelName, Date.now() + NOT_FOUND_COOLDOWN_MS);
+      } else {
+        unhealthyModelUntil.set(modelName, Date.now() + TRANSIENT_COOLDOWN_MS);
+      }
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+  }
+};
+
+// Resilient hedged multi-model Gemini generator (fast primary + 3.5s staggered hedge + full fallback pool)
 export const generateWithGemini = async (contents, options = {}) => {
   const genAI = getGenAIClient();
   if (!genAI) return null;
 
-  const { timeoutMs = 16000, ...modelOptions } = options || {};
-  const candidateModels = [
-    'gemini-flash-lite-latest',
-    'gemini-flash-latest',
-    'gemini-3-flash-preview',
-    'gemini-3.5-flash-lite',
-  ];
+  const { timeoutMs = 15000, ...modelOptions } = options || {};
   const now = Date.now();
-  const healthy = candidateModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
-  const orderedModels = healthy.length > 0 ? healthy : ['gemini-flash-lite-latest', 'gemini-flash-latest'];
+  const validModels = CANDIDATE_MODELS.filter((m) => !notFoundModels.has(m));
+  const healthy = validModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
+  // If all models hit a brief spike, sort by earliest cooldown expiry so ALL fast models remain available
+  const orderedModels =
+    healthy.length > 0
+      ? [...healthy, ...validModels.filter((m) => !healthy.includes(m))]
+      : [...validModels].sort(
+          (a, b) => (unhealthyModelUntil.get(a) || 0) - (unhealthyModelUntil.get(b) || 0)
+        );
 
-  for (const modelName of orderedModels) {
-    const maxAttempts = modelName === 'gemini-flash-lite-latest' ? 2 : 1;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName, ...modelOptions });
-        const result = await model.generateContent(contents, { signal: controller.signal });
-        clearTimeout(timer);
-        const text = result?.response?.text ? result.response.text() : '';
-        if (text) {
-          unhealthyModelUntil.delete(modelName);
-          return { text, modelName };
-        }
-      } catch (err) {
-        clearTimeout(timer);
-        const msg = String(err?.message || '');
-        const isAbort = err?.name === 'AbortError' || msg.includes('aborted') || msg.includes('timed out');
-        const isBadRequest = msg.includes('[400 ') || msg.includes('400 Bad Request');
-        if (isBadRequest) {
-          return null;
-        }
-        const isNotFound = msg.includes('[404 ') || msg.includes('404 Not Found');
-        const isTransient =
-          isAbort ||
-          msg.includes('503') ||
-          msg.includes('429') ||
-          msg.includes('fetch failed') ||
-          msg.includes('ResourceExhausted') ||
-          msg.includes('overloaded');
+  // Stage 1: Hedged race across top 2 models (fires #2 immediately if #1 fails or stalls >3.5s)
+  if (orderedModels.length >= 2) {
+    const [primary, secondary] = orderedModels;
+    const raceAbort = new AbortController();
+    let hedgeTimer = null;
+    try {
+      const winner = await new Promise((resolve, reject) => {
+        let settled = false;
+        let failures = 0;
+        let secondaryStarted = false;
+        let badRequestSeen = false;
 
-        if (attempt + 1 < maxAttempts && isTransient && !isAbort) {
-          await new Promise((r) => setTimeout(r, 450));
-          continue;
-        }
-        if (isNotFound) {
-          unhealthyModelUntil.set(modelName, Date.now() + NOT_FOUND_COOLDOWN_MS);
-        } else if (isTransient) {
-          unhealthyModelUntil.set(modelName, Date.now() + TRANSIENT_COOLDOWN_MS);
-        }
-        break;
+        const finishSuccess = (res) => {
+          if (settled) return;
+          settled = true;
+          if (hedgeTimer) clearTimeout(hedgeTimer);
+          raceAbort.abort();
+          resolve(res);
+        };
+
+        const startSecondary = () => {
+          if (settled || secondaryStarted) return;
+          secondaryStarted = true;
+          if (hedgeTimer) {
+            clearTimeout(hedgeTimer);
+            hedgeTimer = null;
+          }
+          invokeSingleGeminiModel(genAI, secondary, contents, modelOptions, timeoutMs, raceAbort.signal)
+            .then(finishSuccess)
+            .catch((err) => {
+              if (err?.isBadRequest) badRequestSeen = true;
+              failures++;
+              if (!settled && failures >= 2) {
+                settled = true;
+                const finalErr = new Error('Primary hedged models failed');
+                finalErr.isBadRequest = badRequestSeen;
+                reject(finalErr);
+              }
+            });
+        };
+
+        hedgeTimer = setTimeout(startSecondary, HEDGE_DELAY_MS);
+
+        invokeSingleGeminiModel(genAI, primary, contents, modelOptions, timeoutMs, raceAbort.signal)
+          .then(finishSuccess)
+          .catch((err) => {
+            if (err?.isBadRequest) {
+              settled = true;
+              if (hedgeTimer) clearTimeout(hedgeTimer);
+              raceAbort.abort();
+              reject(err);
+              return;
+            }
+            failures++;
+            if (!secondaryStarted) {
+              startSecondary();
+            } else if (!settled && failures >= 2) {
+              settled = true;
+              reject(err);
+            }
+          });
+      });
+
+      if (winner && winner.text) {
+        return winner;
       }
+    } catch (raceErr) {
+      if (hedgeTimer) clearTimeout(hedgeTimer);
+      if (raceErr?.isBadRequest) return null;
     }
   }
+
+  // Stage 2: Parallel burst across remaining pool + fresh lite retry (beats transient Google 503 waves fast!)
+  const burstModels = Array.from(
+    new Set([
+      ...orderedModels.slice(2, 4),
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash-lite',
+    ])
+  ).filter((m) => !notFoundModels.has(m));
+
+  if (burstModels.length > 0) {
+    await new Promise((r) => setTimeout(r, 350));
+    const burstAbort = new AbortController();
+    try {
+      const winner = await Promise.any(
+        burstModels.map((modelName) =>
+          invokeSingleGeminiModel(genAI, modelName, contents, modelOptions, 11000, burstAbort.signal)
+        )
+      );
+      burstAbort.abort();
+      if (winner && winner.text) return winner;
+    } catch {
+      burstAbort.abort();
+    }
+  }
+
   return null;
 };
 
@@ -524,6 +634,7 @@ No extra text or backticks.
       selectedGoals = fallbackMap.web;
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       goals: selectedGoals,
       poweredBy: 'Curated Study Engine'
@@ -719,6 +830,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
       ];
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       flashcards: fallbackDeck,
       poweredBy: 'StudySquad Smart Engine',
@@ -951,6 +1063,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
       ];
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       quiz: fallbackQuiz,
       questions: fallbackQuiz,
@@ -1117,6 +1230,7 @@ Guidelines for your response:
       fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Tip*: You can also tag \`@ai\` directly in Squad Chat anytime!`;
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       response: fallbackText,
       poweredBy: 'StudySquad Smart Engine',
@@ -1362,6 +1476,7 @@ Provide a clear, detailed, academically rigorous explanation covering the concep
       `  2. Copy key slide bullets into **Shared Notes** to generate active-recall flashcards.\n` +
       `  3. Sketch tricky diagrams or derivations with teammates on the **Live Whiteboard**.`;
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       answer,
       fileName: effectiveTitle,
@@ -1534,6 +1649,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     const currentItem = vivaBank[chosenIdx];
     const nextItem = vivaBank[(chosenIdx + 1) % vivaBank.length];
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       score: isFirstQuestion ? null : 8,
       feedback: isFirstQuestion
@@ -1614,6 +1730,7 @@ IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human
       `[ ] Sliding Window with Dynamic Frequency Map\n` +
       `[ ] DFS / BFS Matrix Traversal with Visited Set`;
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       cheatSheet: fallbackSheet,
       poweredBy: 'StudySquad Curated CheatSheet Engine'
@@ -1680,6 +1797,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     }
 
     // Heuristic Fallback
+    res.locals.aiUsedFallback = true;
     return res.json({
       concept: concept.trim(),
       eli5: `Think of ${concept} like a smart organizer in a busy kitchen: instead of searching through every single pantry shelf every time an order comes in, the chef keeps a labeled quick-access rack where the most common ingredients are right in reach!`,
@@ -1760,6 +1878,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     }
 
     // Heuristic Fallback
+    res.locals.aiUsedFallback = true;
     return res.json({
       status: 'Suboptimal',
       timeComplexity: 'O(n) - Single pass loop',
