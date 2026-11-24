@@ -105,10 +105,10 @@ export const enforceAiLimit = (req, res, next) => {
   res.setHeader('X-Daily-Used', nextUsed);
   res.setHeader('X-Daily-Remaining', Math.max(0, DAILY_FREE_LIMIT - nextUsed));
 
-  // Refund credit automatically if validation fails or server returns an error
+  // Refund credit automatically if validation fails, server errors, or AI had to fall back
   let refunded = false;
   res.on('finish', () => {
-    if (!refunded && res.statusCode >= 400) {
+    if (!refunded && (res.statusCode >= 400 || res.locals?.aiUsedFallback)) {
       refunded = true;
       const latest = dailyUsageMap.get(todayKey) || 0;
       if (latest > 0) {

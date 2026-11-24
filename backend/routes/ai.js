@@ -19,11 +19,17 @@ const LATEX_ESCAPE_COLLISION_RE =
 
 export const cleanJson = (text) => {
   if (!text) return '';
-  const cleaned = String(text)
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/, '')
-    .replace(/```\s*$/, '')
-    .trim();
+  let cleaned = String(text).trim();
+  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced && fenced[1]) {
+    cleaned = fenced[1].trim();
+  } else {
+    cleaned = cleaned
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/, '')
+      .replace(/```\s*$/, '')
+      .trim();
+  }
 
   const firstBrace = cleaned.indexOf('{');
   const firstBracket = cleaned.indexOf('[');
@@ -50,29 +56,40 @@ export const cleanJson = (text) => {
   return latexProtected.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 };
 
-const withTimeout = (promise, ms = 25000) =>
-  new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Gemini request timed out')), ms);
-    promise.then(
-      (val) => {
-        clearTimeout(timer);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
+const parseGeminiJson = (rawText) => {
+  if (!rawText) return null;
+  const trimmed = String(rawText).trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Fall through to sanitized extraction
+  }
+  const cleaned = cleanJson(trimmed);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
+  }
+};
+
+// Singleton GoogleGenerativeAI client
+let cachedGenAI = null;
+let cachedGenAIKey = '';
+const getGenAIClient = () => {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') return null;
+  if (!cachedGenAI || cachedGenAIKey !== apiKey) {
+    cachedGenAI = new GoogleGenerativeAI(apiKey);
+    cachedGenAIKey = apiKey;
+  }
+  return cachedGenAI;
+};
 
 // Helper to initialize Gemini with active model support
-export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-    return null;
-  }
+export const getGeminiModel = (modelName = 'gemini-3.5-flash-lite') => {
+  const genAI = getGenAIClient();
+  if (!genAI) return null;
   try {
-    const genAI = new GoogleGenerativeAI(apiKey.trim());
     return genAI.getGenerativeModel({ model: modelName });
   } catch (err) {
     console.error('Error initializing Gemini client:', err);
@@ -80,58 +97,105 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Track models that recently timed out or returned 404/429 so students never hit repeated 20s stalls
-const MODEL_COOLDOWN_MS = 10 * 60 * 1000;
+// 5 independent live-verified Google AI model clusters (separate quotas & traffic pools)
+const AI_MODEL_POOL = [
+  { name: 'gemini-3.5-flash-lite', timeoutMs: 10000, supportsMultimodal: true },
+  { name: 'gemini-flash-lite-latest', timeoutMs: 10000, supportsMultimodal: true },
+  { name: 'gemini-4-hydrogen', timeoutMs: 13000, supportsMultimodal: true },
+  { name: 'gemini-3.1-flash-lite-preview', timeoutMs: 13000, supportsMultimodal: true },
+  { name: 'gemma-4-26b-a4b-it', timeoutMs: 14000, supportsMultimodal: false },
+];
+
+// Short 15s cooldown for transient 503/429/timeouts (never ban healthy models for 10 min!), 10 min only for 404
+const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
+const TRANSIENT_COOLDOWN_MS = 15 * 1000;
 const unhealthyModelUntil = new Map();
+const notFoundModels = new Set();
 
-// Resilient multi-model Gemini generator (fast verified models first + cooldown skipping + transient retry)
-export const generateWithGemini = async (contents, options = {}) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-    return null;
+const extractGeminiText = (response) => {
+  const parts = response?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts) && parts.length > 0) {
+    const visible = parts
+      .filter((p) => !p?.thought && typeof p?.text === 'string')
+      .map((p) => p.text)
+      .join('')
+      .trim();
+    if (visible) return visible;
   }
-  const candidateModels = [
-    'gemini-flash-lite-latest',
-    'gemini-3.5-flash-lite',
-    'gemini-3-flash-preview',
-    'gemini-flash-latest',
-  ];
-  const now = Date.now();
-  const healthy = candidateModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
-  const orderedModels = healthy.length > 0 ? healthy : candidateModels;
-  const genAI = new GoogleGenerativeAI(apiKey.trim());
+  try {
+    return typeof response?.text === 'function' ? String(response.text() || '').trim() : '';
+  } catch {
+    return '';
+  }
+};
 
-  for (const modelName of orderedModels) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName, ...options });
-        const result = await withTimeout(model.generateContent(contents), 18000);
-        const text = result?.response?.text ? result.response.text() : '';
-        if (text) {
-          unhealthyModelUntil.delete(modelName);
-          return { text, modelName };
-        }
-      } catch (err) {
-        const msg = String(err?.message || '');
-        if (
-          attempt === 0 &&
-          (msg.includes('503') || msg.includes('fetch failed') || msg.includes('ResourceExhausted'))
-        ) {
-          await new Promise((r) => setTimeout(r, 400));
-          continue;
-        }
-        if (
-          msg.includes('404') ||
-          msg.includes('429') ||
-          msg.includes('timed out') ||
-          msg.includes('Not Found')
-        ) {
-          unhealthyModelUntil.set(modelName, Date.now() + MODEL_COOLDOWN_MS);
-        }
-        break;
-      }
+const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const model = genAI.getGenerativeModel({ model: modelName, ...options });
+    const result = await model.generateContent(contents, { signal: controller.signal });
+    const text = extractGeminiText(result?.response);
+    if (!text) {
+      throw new Error('Empty AI response');
+    }
+    unhealthyModelUntil.delete(modelName);
+    return { text, modelName };
+  } catch (err) {
+    const msg = String(err?.message || '');
+    console.warn(`[AI] ${modelName} failed:`, msg.slice(0, 160));
+    if (msg.includes('404') || msg.includes('Not Found')) {
+      notFoundModels.add(modelName);
+      unhealthyModelUntil.set(modelName, Date.now() + NOT_FOUND_COOLDOWN_MS);
+    } else if (!msg.includes('400') && !msg.includes('Bad Request')) {
+      unhealthyModelUntil.set(modelName, Date.now() + TRANSIENT_COOLDOWN_MS);
+    } else {
+      err.isBadRequest = true;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// Resilient 5-cluster sequential real-AI failover (1 call normally, instant failover across independent Google AI clusters on 503/timeout)
+export const generateWithGemini = async (contents, options = {}) => {
+  const genAI = getGenAIClient();
+  if (!genAI) return null;
+
+  const isMultimodal = Array.isArray(contents);
+  const eligible = AI_MODEL_POOL.filter(
+    (m) => !notFoundModels.has(m.name) && (!isMultimodal || m.supportsMultimodal)
+  );
+  if (eligible.length === 0) return null;
+
+  const now = Date.now();
+  const healthy = eligible.filter((m) => (unhealthyModelUntil.get(m.name) || 0) <= now);
+  const cooling = eligible
+    .filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now)
+    .sort((a, b) => (unhealthyModelUntil.get(a.name) || 0) - (unhealthyModelUntil.get(b.name) || 0));
+  const ordered = [...healthy, ...cooling];
+
+  // Pass 1: Walk through all independent real AI clusters sequentially (never wastes RPM on parallel bursts)
+  for (const entry of ordered) {
+    try {
+      return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
+    } catch (err) {
+      if (err?.isBadRequest) return null;
     }
   }
+
+  // Pass 2: Brief pause then 1 clean retry on the top 3 independent clusters in case of a momentary global spike
+  await new Promise((r) => setTimeout(r, 1200));
+  const retryPool = eligible.slice(0, 3);
+  for (const entry of retryPool) {
+    try {
+      return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
+    } catch (err) {
+      if (err?.isBadRequest) return null;
+    }
+  }
+
   return null;
 };
 
@@ -203,7 +267,7 @@ No markdown fences, no backticks, only raw JSON.
 
       const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const parsed = JSON.parse(cleanJson(geminiRes.text));
+        const parsed = parseGeminiJson(geminiRes.text);
         if (Array.isArray(parsed)) {
           const matchedSquads = parsed
             .map((m) => {
@@ -310,7 +374,7 @@ No extra text or backticks.
 `;
       const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const goals = JSON.parse(cleanJson(geminiRes.text));
+        const goals = parseGeminiJson(geminiRes.text);
         if (Array.isArray(goals) && goals.length > 0) {
           return res.json({
             goals,
@@ -519,7 +583,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
 `;
       const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const cards = JSON.parse(cleanJson(geminiRes.text));
+        const cards = parseGeminiJson(geminiRes.text);
         if (Array.isArray(cards) && cards.length > 0) {
           return res.json({
             flashcards: cards,
@@ -652,6 +716,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
       ];
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       flashcards: fallbackDeck,
       poweredBy: 'StudySquad Smart Engine',
@@ -701,7 +766,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
 `;
       const geminiRes = await generateWithGemini(prompt);
       if (geminiRes && geminiRes.text) {
-        const quiz = JSON.parse(cleanJson(geminiRes.text));
+        const quiz = parseGeminiJson(geminiRes.text);
         if (Array.isArray(quiz) && quiz.length > 0) {
           return res.json({
             quiz,
@@ -862,6 +927,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
       ];
     }
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       quiz: fallbackQuiz,
       questions: fallbackQuiz,
@@ -937,18 +1003,16 @@ Tailor the specific tasks and topics to ${subject}. Format clearly with Markdown
           ? 'Please analyze this screenshot/image and explain the solution, answer, or concepts step-by-step.'
           : '');
 
-      prompt = `You are a warm, brilliant, patient, and knowledgeable human tutor chatting 1-on-1 with a student in their study space.
-You can answer ANY question the student asks across ALL domains: coding, algorithms, mathematics, science, history, general knowledge, language, logic, creative writing, exam prep, or friendly casual conversation.
-Study Context (use as reference if their question relates to it): "${squadName || 'StudySquad'}" • Subject: "${subject || 'General Studies'}" (${category || 'Academics'}).
+      prompt = `You are a brilliant, warm, knowledgeable AI assistant and personal tutor (like ChatGPT / Gemini) chatting 1-on-1 with a student.
+You can answer LITERALLY ANY question across ALL topics — coding, algorithms, math, science, movies, pop culture, history, geography, career advice, writing, brainstorming, general knowledge, or friendly everyday chat.
+Optional Study Room Context (ONLY use this if the student's question is actually about this subject; NEVER force unrelated questions back to this topic): "${squadName || 'StudySquad'}" • Subject: "${subject || 'General Studies'}" (${category || 'Academics'}).
 
-${safeNotes ? `Relevant notes from squad session:\n"""\n${safeNotes.slice(0, 800)}\n"""\n\n` : ''}${historySnippet}Student: "${effectiveQuery}"
+${safeNotes ? `Relevant notes from squad session (only reference if relevant to the question):\n"""\n${safeNotes.slice(0, 800)}\n"""\n\n` : ''}${historySnippet}Student: "${effectiveQuery}"
 
 Guidelines for your response:
-1. **Answer whatever the student asks directly**: Whether it is a deep algorithmic breakdown, a quick math equation, a conceptual explanation, a code review, or casual dialogue, answer thoroughly, accurately, and immediately without deflection.
-2. **Talk like a friendly, high-caliber ChatGPT tutor**: Be conversational, encouraging, natural, and engaging. Never sound like a stiff textbook, a corporate robot, or a multiple-choice machine.
-3. **Clarity & Formatting**: Use bolding for key terms, step-by-step explanations, code blocks with syntax highlighting, and everyday analogies to make hard ideas click instantly. Write math formulas using clean readable Unicode (like O(n log n), n², ≤, ≥, →, ⇒, ∞, √n) instead of raw LaTeX backslash syntax where practical.
-4. **Natural check-in**: End with a warm, genuine check-in (e.g. "Does that make sense, or would you like to see another quick example?") instead of a robotic menu.
-5. **Visual & Screenshot Analysis**: If an image or screenshot is attached, carefully inspect its visual content (equations, code, diagrams, problem text, slides, or questions) and provide a comprehensive, step-by-step breakdown and solution.`;
+1. **Answer ANYTHING the student asks directly and accurately**: Whether it is coding/DSA with runnable examples, a movie question, a math derivation, general knowledge, or casual conversation, give a real, complete, helpful answer immediately — never deflect or give generic study tips.
+2. **Natural, clear, high-caliber tone**: Be conversational, helpful, and direct. Use bolding for key terms, clean step-by-step explanations, syntax-highlighted code blocks for programming questions, and clean readable Unicode math (O(n log n), n², ≤, ≥, →, ∞, √n) instead of raw LaTeX backslashes where practical.
+3. **Visual & Screenshot Analysis**: If an image or screenshot is attached, carefully inspect its visual content (equations, code, diagrams, problem text, slides, or questions) and solve/explain it step-by-step.`;
     }
 
     try {
@@ -1011,20 +1075,12 @@ Guidelines for your response:
         `• **35:00 - 55:00** ✏️ *Pomodoro Sprint 2*: Practice problems & Whiteboard derivations.\n` +
         `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!`;
     } else if (image) {
-      fallbackText = `📸 **Screenshot Received!**\n\nOur visual AI engine is momentarily busy experiencing high student traffic. Please try sending your screenshot again in a few seconds, or type out the equation/question text so I can solve it right away!`;
+      res.locals.aiUsedFallback = true;
+      fallbackText = `📸 **Screenshot Received!**\n\nGoogle's AI vision servers are briefly busy right this second. Please send your screenshot again in a few seconds (no AI credit was deducted).`;
     } else {
-      const qLower = safeQuery.toLowerCase();
-      let answerBody = `Great question! When studying **${subject || 'this topic'}**, focus on building an intuitive mental model first before diving into memorization. Try explaining the mechanism in your own words to a squad partner on the Whiteboard.`;
-
-      if (qLower.includes('complexity') || qLower.includes('time') || qLower.includes('space')) {
-        answerBody = `In algorithm analysis, **Time Complexity** measures operations relative to input size \`n\`, while **Space Complexity** measures auxiliary memory. Aim for \`O(1)\` auxiliary space and \`O(n)\` or \`O(n log n)\` time whenever feasible.`;
-      } else if (qLower.includes('pomodoro') || qLower.includes('focus') || qLower.includes('productivity')) {
-        answerBody = `The **Pomodoro Technique** enforces 25 minutes of mono-tasking followed by a 5-minute cognitive reset. Research shows this rhythm preserves focus, reduces fatigue, and improves long-term recall.`;
-      } else if (qLower.includes('test') || qLower.includes('exam') || qLower.includes('quiz')) {
-        answerBody = `For exam prep, **Active Recall** (testing yourself without looking at notes) and **Spaced Repetition** are scientifically proven to be 2–3× more effective than passive highlighting. Try generating flashcards in the **Quiz & Cards** tab!`;
-      }
-
-      fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Tip*: You can also tag \`@ai\` directly in Squad Chat anytime!`;
+      res.locals.aiUsedFallback = true;
+      const preview = safeQuery.trim().slice(0, 140);
+      fallbackText = `⏳ **AI Servers Briefly Busy**\n\nAll backup AI models hit a momentary Google traffic spike while answering${preview ? ` **"${preview}"**` : ''}. Please resend your message in a few seconds — **no AI credit was deducted**.`;
     }
 
     return res.json({
@@ -1375,8 +1431,8 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = JSON.parse(cleanJson(geminiResult.text));
-        if (parsed.nextQuestion) {
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && parsed.nextQuestion) {
           return res.json({
             ...parsed,
             poweredBy: `Google Gemini (${geminiResult.modelName})`
@@ -1386,6 +1442,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
         console.warn('Gemini viva JSON parse failed:', parseErr.message);
       }
     }
+    res.locals.aiUsedFallback = true;
 
     // Heuristic Fallback with Extensive Question Generator
     const topicLabel = topic || subject || 'this subject';
@@ -1499,6 +1556,7 @@ IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human
       `[ ] Sliding Window with Dynamic Frequency Map\n` +
       `[ ] DFS / BFS Matrix Traversal with Visited Set`;
 
+    res.locals.aiUsedFallback = true;
     return res.json({
       cheatSheet: fallbackSheet,
       poweredBy: 'StudySquad Curated CheatSheet Engine'
@@ -1540,22 +1598,18 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const cleaned = cleanJson(geminiResult.text);
-        let parsed;
-        try {
-          parsed = JSON.parse(cleaned);
-        } catch {
-          // If strict parse failed due to unescaped internal raw line breaks, normalize them
-          parsed = JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && typeof parsed === 'object') {
+          return res.json({
+            ...parsed,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`
+          });
         }
-        return res.json({
-          ...parsed,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`
-        });
       } catch (parseErr) {
         console.warn('Gemini feynman JSON parse failed:', parseErr.message);
       }
     }
+    res.locals.aiUsedFallback = true;
 
     // Heuristic Fallback
     return res.json({
@@ -1614,15 +1668,18 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
     const geminiResult = await generateWithGemini(prompt);
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = JSON.parse(cleanJson(geminiResult.text));
-        return res.json({
-          ...parsed,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`
-        });
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && typeof parsed === 'object') {
+          return res.json({
+            ...parsed,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`
+          });
+        }
       } catch (parseErr) {
         console.warn('Gemini code audit parse failed:', parseErr.message);
       }
     }
+    res.locals.aiUsedFallback = true;
 
     // Heuristic Fallback
     return res.json({
