@@ -378,7 +378,7 @@ const sanitizeStroke = (s) => {
 const toPublicUser = (u, fallbackId) => ({
   id: u?.id || fallbackId,
   name: typeof u?.name === 'string' && u.name.trim() ? u.name.trim().slice(0, 80) : 'Guest Explorer',
-  avatar: typeof u?.avatar === 'string' ? u.avatar.slice(0, 512) : '',
+  avatar: typeof u?.avatar === 'string' && u.avatar.length <= 220_000 ? u.avatar : '',
 });
 
 // Real-Time Socket.io Connection & Study Rooms
