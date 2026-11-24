@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import { motion } from 'motion/react';
 import {
   Brain,
@@ -47,7 +47,7 @@ function isPaywallError(err) {
   );
 }
 
-export default function AIStudyStudio({ squad, user, socket, openAuthModal, onOpenProModal }) {
+const AIStudyStudio = memo(function AIStudyStudio({ squad, user, socket, openAuthModal, onOpenProModal }) {
   // Mode: 'flashcards' | 'quiz'
   const [mode, setMode] = useState('flashcards');
 
@@ -119,7 +119,7 @@ export default function AIStudyStudio({ squad, user, socket, openAuthModal, onOp
   const [chatInput, setChatInput] = useState('');
   const [chatPastedImage, setChatPastedImage] = useState(null);
   const fileInputRef = useRef(null);
-  const tutorChatEndRef = useRef(null);
+  const chatScrollRef = useRef(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [chatCopiedId, setChatCopiedId] = useState(null);
 
@@ -153,8 +153,8 @@ export default function AIStudyStudio({ squad, user, socket, openAuthModal, onOp
   }, [user?.id, user?.isPro]);
 
   useEffect(() => {
-    if (mode === 'chat') {
-      tutorChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (mode === 'chat' && chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [chatMessages.length, isChatLoading, mode]);
 
@@ -1677,11 +1677,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         <div className="flex overflow-x-auto no-scrollbar scroll-smooth gap-2 pb-1 sm:grid sm:grid-cols-4 lg:grid-cols-7">
           <button
             type="button"
-            onClick={() => {
-              setMode('flashcards');
-              if (flashcards.length === 0) handleGenerate('flashcards');
-            }}
-            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
+            onClick={() => setMode('flashcards')}
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'flashcards'
                 ? 'bg-emerald-500 text-neutral-950 border-emerald-400 shadow-md shadow-emerald-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -1693,11 +1690,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
           <button
             type="button"
-            onClick={() => {
-              setMode('quiz');
-              if (quizQuestions.length === 0) handleGenerate('quiz');
-            }}
-            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border shrink-0 whitespace-nowrap ${
+            onClick={() => setMode('quiz')}
+            className={`py-2 px-3 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border shrink-0 whitespace-nowrap ${
               mode === 'quiz'
                 ? 'bg-violet-500 text-white border-violet-400 shadow-md shadow-violet-500/20'
                 : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
@@ -2305,7 +2299,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           {/* Chat Messages Stream Box */}
           <div className="flex flex-col h-[520px] rounded-3xl bg-neutral-950/70 border border-white/10 overflow-hidden shadow-2xl">
             {/* Messages Scroll Area */}
-            <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4">
+            <div ref={chatScrollRef} className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4">
               {chatMessages.map((msg) => {
                 const isUser = msg.sender === 'user';
                 return (
@@ -2393,8 +2387,6 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                   </div>
                 </div>
               )}
-
-              <div ref={tutorChatEndRef} />
             </div>
 
             {/* Attached Screenshot Preview Banner */}
@@ -2788,8 +2780,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       )}
 
       {/* ─── MODE 4: 1-PAGE HIGH-YIELD REVISION CHEAT SHEET ─────────────────────── */}
-      {mode === 'cheatsheet' && (
-        <div className="space-y-4">
+      {(mode === 'cheatsheet' || Boolean(cheatSheetText)) && (
+        <div className={mode === 'cheatsheet' ? 'space-y-4' : 'hidden'}>
           {/* Header Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white/5 border border-white/10">
             <div>
@@ -3160,4 +3152,6 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       )}
     </div>
   );
-}
+});
+
+export default AIStudyStudio;

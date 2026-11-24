@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, memo } from "react";
 import {
   BookOpen,
   FileText,
@@ -615,7 +615,7 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
   );
 }
 
-export default function ResourceHub({ squad, user, socket, openAuthModal, onOpenProModal }) {
+const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthModal, onOpenProModal }) {
   // Sub-tabs: 'notes' | 'resources' | 'slides'
   const [activeSubTab, setActiveSubTab] = useState("slides");
   const [activeDocChat, setActiveDocChat] = useState(null);
@@ -1409,4 +1409,6 @@ export default function ResourceHub({ squad, user, socket, openAuthModal, onOpen
       )}
     </div>
   );
-}
+});
+
+export default ResourceHub;

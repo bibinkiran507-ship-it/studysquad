@@ -71,25 +71,9 @@ function TabLoader() {
   );
 }
 
-// Animated wrapper for every tab panel
-const TAB_VARIANTS = {
-  hidden:  { opacity: 0, y: 8 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.22, ease: 'easeOut' } },
-  exit:    { opacity: 0, y: -6, transition: { duration: 0.15, ease: 'easeIn' } },
-};
-
+// Lightweight instant wrapper for tab panels (zero exit-blocking lag)
 function TabPanel({ children, className = '' }) {
-  return (
-    <motion.div
-      variants={TAB_VARIANTS}
-      initial="hidden"
-      animate="visible"
-      exit="exit"
-      className={className}
-    >
-      {children}
-    </motion.div>
-  );
+  return <div className={className}>{children}</div>;
 }
 
 
@@ -118,6 +102,8 @@ export default function SquadRoomModal({
   const [activeTab, setActiveTab] = useState('focus');
   const [hasOpenedWhiteboard, setHasOpenedWhiteboard] = useState(false);
   const [hasOpenedVideo, setHasOpenedVideo] = useState(false);
+  const [hasOpenedQuiz, setHasOpenedQuiz] = useState(false);
+  const [hasOpenedResources, setHasOpenedResources] = useState(false);
 
   // Pomodoro State
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
@@ -211,12 +197,13 @@ export default function SquadRoomModal({
   const activeTabRef = useRef(activeTab);
   const tabListRef = useRef(null);
 
-  // Auto-scroll active tab into view so it is never cut off on any screen size
+  // Auto-scroll active tab into view ONLY when the tab strip overflows horizontally (mobile)
   useEffect(() => {
-    if (tabListRef.current) {
-      const activeEl = tabListRef.current.querySelector('[data-active="true"]');
+    const container = tabListRef.current;
+    if (container && container.scrollWidth > container.clientWidth) {
+      const activeEl = container.querySelector('[data-active="true"]');
       if (activeEl) {
-        activeEl.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+        activeEl.scrollIntoView({ behavior: 'auto', inline: 'nearest', block: 'nearest' });
       }
     }
   }, [activeTab]);
@@ -242,21 +229,25 @@ export default function SquadRoomModal({
     }
   }, [globalPresence, squad?.id]);
 
-  // Reset persistent Whiteboard / Video tabs whenever modal closes or switches to a different squad
+  // Reset persistent heavy tabs whenever modal closes or switches to a different squad
   useEffect(() => {
     setHasOpenedWhiteboard(false);
     setHasOpenedVideo(false);
+    setHasOpenedQuiz(false);
+    setHasOpenedResources(false);
     setUnreadCount(0);
     if (!isOpen) {
       setActiveTab('focus');
     }
   }, [isOpen, squad?.id]);
 
-  // Mark Whiteboard / Video as visited once opened so switching tabs keeps the call & drawings live
+  // Mark heavy tabs as visited once opened so switching tabs is 0ms instant & preserves state
   useEffect(() => {
     if (!isOpen || !squad?.id) return;
     if (activeTab === 'whiteboard') setHasOpenedWhiteboard(true);
     if (activeTab === 'video') setHasOpenedVideo(true);
+    if (activeTab === 'quiz') setHasOpenedQuiz(true);
+    if (activeTab === 'resources') setHasOpenedResources(true);
   }, [isOpen, squad?.id, activeTab]);
 
   // Release hardware AudioContext on unmount
@@ -723,13 +714,14 @@ export default function SquadRoomModal({
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/80 backdrop-blur-md">
-        {/* Modal Card */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/80 backdrop-blur-sm">
+        {/* Modal Card (solid surface avoids expensive full-screen backdrop-blur repaints during scrolling/tab clicks) */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          initial={{ opacity: 0, scale: 0.97, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-neutral-900/95 text-white w-full max-w-6xl h-full sm:h-auto sm:max-h-[92vh] rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-white/15 overflow-hidden flex flex-col backdrop-blur-2xl"
+          exit={{ opacity: 0, scale: 0.97, y: 10 }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+          className="bg-neutral-950 text-white w-full max-w-6xl h-full sm:h-auto sm:max-h-[92vh] rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-white/15 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div className="px-3 sm:px-6 py-2.5 sm:py-4 border-b border-white/10 flex items-center justify-between bg-white/5 gap-2 shrink-0">
@@ -871,16 +863,13 @@ export default function SquadRoomModal({
           {/* Navigation Tabs */}
           <div
             ref={tabListRef}
-            className="flex items-center px-2 sm:px-6 border-b border-white/10 bg-black/25 gap-1 sm:gap-1.5 lg:gap-2.5 overflow-x-auto no-scrollbar scroll-smooth flex-nowrap shrink-0"
+            className="flex items-center px-2 sm:px-6 border-b border-white/10 bg-black/25 gap-1 sm:gap-1.5 lg:gap-2.5 overflow-x-auto no-scrollbar flex-nowrap shrink-0"
           >
             <button
               type="button"
               data-active={activeTab === 'focus'}
-              onClick={(e) => {
-                setActiveTab('focus');
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-              }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              onClick={() => setActiveTab('focus')}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'focus'
                   ? 'border-emerald-400 text-emerald-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -893,11 +882,8 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'whiteboard'}
-              onClick={(e) => {
-                setActiveTab('whiteboard');
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-              }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              onClick={() => setActiveTab('whiteboard')}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'whiteboard'
                   ? 'border-violet-400 text-violet-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -913,11 +899,8 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'video'}
-              onClick={(e) => {
-                setActiveTab('video');
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-              }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              onClick={() => setActiveTab('video')}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'video'
                   ? 'border-rose-400 text-rose-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -934,11 +917,8 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'quiz'}
-              onClick={(e) => {
-                setActiveTab('quiz');
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-              }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              onClick={() => setActiveTab('quiz')}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'quiz'
                   ? 'border-violet-400 text-violet-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -954,12 +934,11 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'chat'}
-              onClick={(e) => {
+              onClick={() => {
                 setActiveTab('chat');
                 setUnreadCount(0);
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
               }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] relative ${
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] relative ${
                 activeTab === 'chat'
                   ? 'border-cyan-400 text-cyan-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -984,11 +963,8 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'resources'}
-              onClick={(e) => {
-                setActiveTab('resources');
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-              }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              onClick={() => setActiveTab('resources')}
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'resources'
                   ? 'border-amber-400 text-amber-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -1005,12 +981,11 @@ export default function SquadRoomModal({
             <button
               type="button"
               data-active={activeTab === 'schedule'}
-              onClick={(e) => {
+              onClick={() => {
                 setActiveTab('schedule');
                 fetchSquadEvents();
-                e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
               }}
-              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+              className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                 activeTab === 'schedule'
                   ? 'border-emerald-400 text-emerald-400'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -1030,7 +1005,7 @@ export default function SquadRoomModal({
               <button
                 type="button"
                 data-active={activeTab === 'admin'}
-                onClick={(e) => {
+                onClick={() => {
                   setActiveTab('admin');
                   if (squadMembers.length === 0) {
                     setLoadingMembers(true);
@@ -1039,9 +1014,8 @@ export default function SquadRoomModal({
                       .catch(console.warn)
                       .finally(() => setLoadingMembers(false));
                   }
-                  e.currentTarget?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
                 }}
-                className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-all cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
+                className={`py-3 px-2 sm:px-2.5 text-xs sm:text-sm font-semibold flex items-center gap-1.5 sm:gap-2 border-b-2 transition-colors cursor-pointer shrink-0 rounded-t-lg hover:bg-white/[0.04] ${
                   activeTab === 'admin'
                     ? 'border-rose-400 text-rose-400'
                     : 'border-transparent text-neutral-400 hover:text-neutral-200'
@@ -1086,7 +1060,34 @@ export default function SquadRoomModal({
               </div>
             )}
 
-            <AnimatePresence mode="wait">
+            {hasOpenedQuiz && (
+              <div className={activeTab === 'quiz' ? 'block' : 'hidden'}>
+                <Suspense fallback={<TabLoader />}>
+                  <AIStudyStudio
+                    squad={squad}
+                    user={user}
+                    socket={socket}
+                    openAuthModal={openAuthModal}
+                    onOpenProModal={onOpenProModal}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {hasOpenedResources && (
+              <div className={activeTab === 'resources' ? 'block' : 'hidden'}>
+                <Suspense fallback={<TabLoader />}>
+                  <ResourceHub
+                    squad={squad}
+                    user={user}
+                    socket={socket}
+                    openAuthModal={openAuthModal}
+                    onOpenProModal={onOpenProModal}
+                  />
+                </Suspense>
+              </div>
+            )}
+
               {activeTab === 'focus' && (
                 <TabPanel key="focus">
 
@@ -1461,34 +1462,6 @@ export default function SquadRoomModal({
                     </button>
                   </form>
                 </div>
-                </TabPanel>
-              )}
-
-              {activeTab === 'quiz' && (
-                <TabPanel key="quiz">
-                  <Suspense fallback={<TabLoader />}>
-                    <AIStudyStudio
-                      squad={squad}
-                      user={user}
-                      socket={socket}
-                      openAuthModal={openAuthModal}
-                      onOpenProModal={onOpenProModal}
-                    />
-                  </Suspense>
-                </TabPanel>
-              )}
-
-              {activeTab === 'resources' && (
-                <TabPanel key="resources">
-                  <Suspense fallback={<TabLoader />}>
-                    <ResourceHub
-                      squad={squad}
-                      user={user}
-                      socket={socket}
-                      openAuthModal={openAuthModal}
-                      onOpenProModal={onOpenProModal}
-                    />
-                  </Suspense>
                 </TabPanel>
               )}
 
@@ -2044,7 +2017,6 @@ export default function SquadRoomModal({
                   </div>
                 </TabPanel>
               )}
-            </AnimatePresence>
           </div>
 
         </motion.div>

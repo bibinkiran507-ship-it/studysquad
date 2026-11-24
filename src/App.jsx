@@ -415,6 +415,14 @@ function AppInner() {
     setLiveAlerts((prev) => prev.filter((a) => a.id !== alertId));
   }, []);
 
+  const handleOpenProModal = useCallback(() => {
+    setIsProModalOpen(true);
+  }, []);
+
+  const handleCloseSquadRoom = useCallback(() => {
+    setActiveSquadRoom(null);
+  }, []);
+
   const handleJoinFromAlert = useCallback(
     (squadId) => {
       const target = squads.find((s) => s.id === squadId);
@@ -557,12 +565,12 @@ function AppInner() {
           <SquadRoomModal
             squad={activeSquadRoom}
             isOpen={!!activeSquadRoom}
-            onClose={() => setActiveSquadRoom(null)}
+            onClose={handleCloseSquadRoom}
             onToggleTask={handleToggleTask}
             onAddTask={handleAddTask}
             globalPresence={globalPresence}
             onLeaveSquad={handleLeaveSquad}
-            onOpenProModal={() => setIsProModalOpen(true)}
+            onOpenProModal={handleOpenProModal}
             sharedSocket={sharedSocket}
           />
         </Suspense>
