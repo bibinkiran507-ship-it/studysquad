@@ -168,17 +168,116 @@ const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) =
   }
 };
 
-// Fast-first multi-cluster Gemini generator:
-// 1) Round-robins across the 2 proven sub-4s Flash Lite models (16s timeout so full Cheat Sheets never cut off)
-// 2) On transient 503, does a crisp 900ms retry on the fast pair BEFORE touching slower preview backups
-// 3) Falls back to independent Gemini 3.1 / 4 clusters with tight 8s caps (zero 35s-65s stalls)
+const GROQ_TEXT_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+const GROQ_VISION_MODELS = ['meta-llama/llama-4-scout-17b-16e-instruct'];
+
+export const formatPoweredBy = (aiRes) => {
+  if (!aiRes) return 'StudySquad Smart Engine';
+  if (aiRes.provider === 'Groq') {
+    return `Groq AI (${aiRes.modelName})`;
+  }
+  return `Google Gemini (${aiRes.modelName})`;
+};
+
+// Zero-dependency Groq real-AI backup (sub-1-second Llama 3.3 70B when Google Free Tier hits 503 spikes)
+const generateWithGroq = async (contents, options = {}) => {
+  const apiKey = (process.env.GROQ_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'YOUR_GROQ_API_KEY_HERE') return null;
+
+  let hasImage = false;
+  let messageContent = '';
+
+  if (typeof contents === 'string') {
+    messageContent = contents;
+  } else if (Array.isArray(contents)) {
+    const parts = [];
+    for (const item of contents) {
+      if (typeof item === 'string') {
+        parts.push({ type: 'text', text: item });
+      } else if (item?.inlineData?.data && item?.inlineData?.mimeType) {
+        if (!item.inlineData.mimeType.startsWith('image/')) {
+          // Non-image binary attachments (e.g. raw PDF) are handled by Gemini only
+          return null;
+        }
+        hasImage = true;
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${item.inlineData.mimeType};base64,${item.inlineData.data}`,
+          },
+        });
+      }
+    }
+    if (parts.length === 0) return null;
+    messageContent = hasImage ? parts : parts.map((p) => p.text).join('\n');
+  } else {
+    return null;
+  }
+
+  const candidateModels = hasImage ? GROQ_VISION_MODELS : GROQ_TEXT_MODELS;
+  const temperature =
+    typeof options?.generationConfig?.temperature === 'number'
+      ? Math.min(1, Math.max(0, options.generationConfig.temperature))
+      : 0.7;
+  const maxTokens = Math.min(
+    4096,
+    Number(options?.generationConfig?.maxOutputTokens) || 2048
+  );
+
+  for (const modelName of candidateModels) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelName,
+          messages: [{ role: 'user', content: messageContent }],
+          temperature,
+          max_tokens: maxTokens,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        console.warn(`[AI/Groq] ${modelName} HTTP ${res.status}:`, errBody.slice(0, 140));
+        continue;
+      }
+      const data = await res.json();
+      const text = String(data?.choices?.[0]?.message?.content || '').trim();
+      if (text) {
+        return { text, modelName, provider: 'Groq' };
+      }
+    } catch (err) {
+      console.warn(`[AI/Groq] ${modelName} failed:`, String(err?.message || '').slice(0, 140));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+};
+
+// Fast-first multi-cluster Gemini + instant Groq backup generator:
+// 1) Primary #1: Round-robins across Google's 2 proven sub-4s Flash Lite models
+// 2) Instant Backup: If Google Free Tier spikes (503/timeout), immediately switches to Groq Llama 3.3 70B (~0.8s!)
+// 3) Secondary Fallback: Gemini retry + independent Gemini 3.1 / 4 clusters if Groq isn't configured
 export const generateWithGemini = async (contents, options = {}) => {
   const genAI = getGenAIClient();
-  if (!genAI) return null;
+  const hasGroqKey = Boolean(
+    (process.env.GROQ_API_KEY || '').trim() &&
+      (process.env.GROQ_API_KEY || '').trim() !== 'YOUR_GROQ_API_KEY_HERE'
+  );
+
+  if (!genAI) {
+    return hasGroqKey ? await generateWithGroq(contents, options) : null;
+  }
 
   const activeFast = FAST_GEMINI_MODELS.filter((m) => !notFoundModels.has(m.name));
   const activeBackup = BACKUP_GEMINI_MODELS.filter((m) => !notFoundModels.has(m.name));
-  if (activeFast.length === 0 && activeBackup.length === 0) return null;
 
   // Alternate starting fast model to spread RPM evenly across both Flash Lite endpoints
   const startIdx = activeFast.length > 1 ? roundRobinCursor++ % activeFast.length : 0;
@@ -191,16 +290,31 @@ export const generateWithGemini = async (contents, options = {}) => {
     ...rotatedFast.filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now),
   ];
 
-  // Pass 1: Proven fast pair (typically 1.3s - 4.5s, single API call)
+  // Pass 1: Google Gemini Fast Pair (8s cap when Groq instant backup is armed, 16s when Gemini-only)
+  const pass1Timeout = hasGroqKey ? 8000 : null;
   for (const entry of fastOrdered) {
     try {
-      return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
+      return await invokeModelOnce(
+        genAI,
+        entry.name,
+        contents,
+        options,
+        pass1Timeout || entry.timeoutMs
+      );
     } catch (err) {
       if (err?.isBadRequest) return null;
     }
   }
 
-  // Pass 2: Brief 900ms pause then retry fast pair (clears short 503 blips in ~4s instead of 35s!)
+  // Pass 2: Instant Groq Llama 3.3 70B real-AI backup (answers in ~0.6s-1.5s whenever Google hits 503!)
+  if (hasGroqKey) {
+    const groqRes = await generateWithGroq(contents, options);
+    if (groqRes && groqRes.text) {
+      return groqRes;
+    }
+  }
+
+  // Pass 3: Brief 900ms pause then retry Gemini fast pair
   await new Promise((r) => setTimeout(r, 900));
   for (const entry of rotatedFast) {
     try {
@@ -210,7 +324,7 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Pass 3: Secondary independent Gemini clusters (tight 8s cap so they never hang)
+  // Pass 4: Secondary independent Gemini clusters (tight 8s cap)
   for (const entry of activeBackup) {
     try {
       return await invokeModelOnce(genAI, entry.name, contents, options, entry.timeoutMs);
@@ -219,7 +333,7 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Pass 4: Final fast-pair recovery after 1.5s if Google had a brief multi-second wave
+  // Pass 5: Final fast-pair recovery after 1.5s
   await new Promise((r) => setTimeout(r, 1500));
   for (const entry of rotatedFast) {
     try {
@@ -319,7 +433,7 @@ No markdown fences, no backticks, only raw JSON.
           if (matchedSquads.length > 0) {
             return res.json({
               matches: matchedSquads,
-              poweredBy: `Google Gemini (${geminiRes.modelName})`,
+              poweredBy: formatPoweredBy(geminiRes),
             });
           }
         }
@@ -411,7 +525,7 @@ No extra text or backticks.
         if (Array.isArray(goals) && goals.length > 0) {
           return res.json({
             goals,
-            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            poweredBy: formatPoweredBy(geminiRes),
           });
         }
       }
@@ -620,7 +734,7 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
         if (Array.isArray(cards) && cards.length > 0) {
           return res.json({
             flashcards: cards,
-            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            poweredBy: formatPoweredBy(geminiRes),
           });
         }
       }
@@ -804,7 +918,7 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
           return res.json({
             quiz,
             questions: quiz,
-            poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            poweredBy: formatPoweredBy(geminiRes),
           });
         }
       }
@@ -1079,7 +1193,7 @@ Guidelines for your response:
       if (geminiResult && geminiResult.text) {
         return res.json({
           response: geminiResult.text,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`,
+          poweredBy: formatPoweredBy(geminiResult),
           mode,
         });
       }
@@ -1288,7 +1402,7 @@ Instructions:
             return res.json({
               answer: geminiResult.text,
               fileName: effectiveTitle,
-              poweredBy: `Google Gemini (${geminiResult.modelName})`,
+              poweredBy: formatPoweredBy(geminiResult),
             });
           }
         }
@@ -1307,7 +1421,7 @@ Instructions:
           return res.json({
             answer: geminiResult.text,
             fileName: effectiveTitle,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`,
+            poweredBy: formatPoweredBy(geminiResult),
           });
         }
       } catch (persistErr) {
@@ -1328,7 +1442,7 @@ Provide a clear, detailed, academically rigorous explanation covering the concep
         return res.json({
           answer: geminiResult.text,
           fileName: effectiveTitle,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`,
+          poweredBy: formatPoweredBy(geminiResult),
         });
       }
     } catch (err) {
@@ -1468,7 +1582,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
         if (parsed && parsed.nextQuestion) {
           return res.json({
             ...parsed,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
+            poweredBy: formatPoweredBy(geminiResult)
           });
         }
       } catch (parseErr) {
@@ -1561,7 +1675,7 @@ IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human
     if (geminiResult && geminiResult.text) {
       return res.json({
         cheatSheet: geminiResult.text,
-        poweredBy: `Google Gemini (${geminiResult.modelName})`
+        poweredBy: formatPoweredBy(geminiResult)
       });
     }
 
@@ -1635,7 +1749,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
         if (parsed && typeof parsed === 'object') {
           return res.json({
             ...parsed,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
+            poweredBy: formatPoweredBy(geminiResult)
           });
         }
       } catch (parseErr) {
@@ -1705,7 +1819,7 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
         if (parsed && typeof parsed === 'object') {
           return res.json({
             ...parsed,
-            poweredBy: `Google Gemini (${geminiResult.modelName})`
+            poweredBy: formatPoweredBy(geminiResult)
           });
         }
       } catch (parseErr) {
