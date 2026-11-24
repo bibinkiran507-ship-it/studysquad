@@ -101,17 +101,13 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
 // Smart cooldowns: 404 Not Found -> 10 min; transient 429/503/timeout -> 10s (Google demand spikes clear fast!)
 const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
 const TRANSIENT_COOLDOWN_MS = 10 * 1000;
-const HEDGE_DELAY_MS = 3000; // Start secondary fast model only if primary stalls >3s (zero extra quota normally)
+const HEDGE_DELAY_MS = 2800; // Start secondary fast model only if primary stalls >2.8s (zero extra quota normally)
 const unhealthyModelUntil = new Map();
 const notFoundModels = new Set();
 
-const CANDIDATE_MODELS = [
-  'gemini-flash-lite-latest',
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
-  'gemini-3-flash-preview',
-  'gemini-flash-latest',
-];
+// Verified active free-tier fast models (never waste slots on 429 limit=0 models)
+const PRIMARY_FAST_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
+const CANDIDATE_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
 
 const invokeSingleGeminiModel = async (genAI, modelName, contents, modelOptions, timeoutMs, externalSignal) => {
   const controller = new AbortController();
@@ -248,22 +244,16 @@ export const generateWithGemini = async (contents, options = {}) => {
     }
   }
 
-  // Stage 2: Parallel burst across remaining pool + fresh lite retry (beats transient Google 503 waves fast!)
-  const burstModels = Array.from(
-    new Set([
-      ...orderedModels.slice(2, 4),
-      'gemini-flash-lite-latest',
-      'gemini-3.5-flash-lite',
-    ])
-  ).filter((m) => !notFoundModels.has(m));
-
-  if (burstModels.length > 0) {
-    await new Promise((r) => setTimeout(r, 350));
+  // Stage 2: 2 staggered parallel retries strictly across verified active lite models (recovers from 2-4s Google 503 spikes)
+  const retryModels = PRIMARY_FAST_MODELS.filter((m) => !notFoundModels.has(m));
+  for (const backoffMs of [800, 1800]) {
+    if (retryModels.length === 0) break;
+    await new Promise((r) => setTimeout(r, backoffMs));
     const burstAbort = new AbortController();
     try {
       const winner = await Promise.any(
-        burstModels.map((modelName) =>
-          invokeSingleGeminiModel(genAI, modelName, contents, modelOptions, 11000, burstAbort.signal)
+        retryModels.map((modelName) =>
+          invokeSingleGeminiModel(genAI, modelName, contents, modelOptions, 10000, burstAbort.signal)
         )
       );
       burstAbort.abort();
@@ -1214,20 +1204,9 @@ Guidelines for your response:
         `• **35:00 - 55:00** ✏️ *Pomodoro Sprint 2*: Practice problems & Whiteboard derivations.\n` +
         `• **55:00 - 60:00** 🏆 *Recap & Celebrate*: Mark finished tasks and schedule next meetup!`;
     } else if (image) {
-      fallbackText = `📸 **Screenshot Received!**\n\nOur visual AI engine is momentarily busy experiencing high student traffic. Please try sending your screenshot again in a few seconds, or type out the equation/question text so I can solve it right away!`;
+      fallbackText = `📸 **Screenshot Received!**\n\nGoogle Gemini Vision is momentarily handling a global traffic spike. Please resend your screenshot in 5 seconds (no AI credit was used!).`;
     } else {
-      const qLower = safeQuery.toLowerCase();
-      let answerBody = `Great question! When studying **${subject || 'this topic'}**, focus on building an intuitive mental model first before diving into memorization. Try explaining the mechanism in your own words to a squad partner on the Whiteboard.`;
-
-      if (qLower.includes('complexity') || qLower.includes('time') || qLower.includes('space')) {
-        answerBody = `In algorithm analysis, **Time Complexity** measures operations relative to input size \`n\`, while **Space Complexity** measures auxiliary memory. Aim for \`O(1)\` auxiliary space and \`O(n)\` or \`O(n log n)\` time whenever feasible.`;
-      } else if (qLower.includes('pomodoro') || qLower.includes('focus') || qLower.includes('productivity')) {
-        answerBody = `The **Pomodoro Technique** enforces 25 minutes of mono-tasking followed by a 5-minute cognitive reset. Research shows this rhythm preserves focus, reduces fatigue, and improves long-term recall.`;
-      } else if (qLower.includes('test') || qLower.includes('exam') || qLower.includes('quiz')) {
-        answerBody = `For exam prep, **Active Recall** (testing yourself without looking at notes) and **Spaced Repetition** are scientifically proven to be 2–3× more effective than passive highlighting. Try generating flashcards in the **Quiz & Cards** tab!`;
-      }
-
-      fallbackText = `🤖 **StudySquad AI Tutor**:\n\n${answerBody}\n\n💡 *Tip*: You can also tag \`@ai\` directly in Squad Chat anytime!`;
+      fallbackText = `⏳ **Momentary AI Traffic Spike!**\n\nGoogle Gemini is briefly overloaded right this second and couldn't answer **"${safeQuery.slice(0, 120)}"** yet. Please send your message again in **3–5 seconds** — no AI credit was deducted!`;
     }
 
     res.locals.aiUsedFallback = true;
