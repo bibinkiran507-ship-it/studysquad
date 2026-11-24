@@ -95,12 +95,16 @@ export default function UpgradeProModal({ isOpen, onClose }) {
 
   if (!isOpen) return null;
 
-  // Load Razorpay checkout script dynamically on demand
+  // Load Razorpay checkout script dynamically on demand (deduplicated)
   const loadRazorpayScript = () => {
     return new Promise((resolve) => {
       if (window.Razorpay) {
         resolve(true);
         return;
+      }
+      const existing = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+      if (existing) {
+        existing.remove();
       }
       const script = document.createElement('script');
       script.src = 'https://checkout.razorpay.com/v1/checkout.js';

@@ -815,8 +815,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   }
 }
 
-  // Generate either Flashcards or Quiz
+  // Generate either Flashcards or Quiz (with double-click guard)
   const handleGenerate = async (targetMode = mode) => {
+    if (isGenerating) return;
     if (!user) {
       openAuthModal?.('register');
       return;
@@ -844,8 +845,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           notes: notesContext,
         });
 
-        if (res.data?.flashcards && res.data.flashcards.length > 0) {
-          setFlashcards(res.data.flashcards);
+        if (Array.isArray(res.data?.flashcards) && res.data.flashcards.length > 0) {
+          const normalized = res.data.flashcards.map((c, idx) => ({
+            ...c,
+            id: c?.id || `fc-${idx + 1}`,
+          }));
+          setFlashcards(normalized);
           setCurrentIndex(0);
           setMasteredIds(new Set());
           setReviewIds(new Set());
@@ -861,8 +866,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           notes: notesContext,
         });
 
-        if (res.data?.quiz && res.data.quiz.length > 0) {
-          setQuizQuestions(res.data.quiz);
+        if (Array.isArray(res.data?.quiz) && res.data.quiz.length > 0) {
+          const normalizedQuiz = res.data.quiz
+            .filter((q) => q && Array.isArray(q.options) && q.options.length > 0)
+            .map((q, idx) => ({ ...q, id: q.id || `q-${idx + 1}` }));
+          if (normalizedQuiz.length === 0) throw new Error('Empty quiz response');
+          setQuizQuestions(normalizedQuiz);
           setCurrentQuizIndex(0);
           setSelectedAnswers({});
           setIsQuizFinished(false);
@@ -1022,6 +1031,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
   // ─── Mode 3: Viva Voce Handlers ─────────────────────────────────────────────
   const handleStartViva = async (opts = {}) => {
+    if (isSubmittingViva) return;
     if (!user) {
       openAuthModal?.('register');
       return;
@@ -1044,17 +1054,19 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         subject: squad?.subject || 'Academics',
         topic: activeTopic,
         level: currentLevel,
-        questionNumber: 1,
+        questionNumber: isReroll ? vivaStage : 1,
         totalQuestions: targetCount,
         excludeQuestions: exclusions,
         seed: Date.now(),
       });
 
       setVivaQuestion(res.data?.nextQuestion || `Explain the core invariant and mechanism of ${activeTopic} in your own words.`);
-      setVivaFeedback(null);
       setVivaAnswerInput('');
-      setVivaStage(1);
-      setVivaHistory([]);
+      if (!isReroll) {
+        setVivaFeedback(null);
+        setVivaStage(1);
+        setVivaHistory([]);
+      }
       setIsVivaActive(true);
       setIsVivaFinished(false);
     } catch (err) {
@@ -1072,12 +1084,14 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         `In practical production environments, how does hardware architecture—such as CPU cache locality and branch prediction—affect the performance of ${activeTopic}?`,
         `How would you prove the termination and inductive correctness of ${activeTopic} under adversarial input conditions?`,
       ];
-      const idx = (Number(targetCount) + currentLevel.length + (isReroll ? 1 : 0)) % fallbackQuestions.length;
+      const idx = (Number(targetCount) + currentLevel.length + (isReroll ? vivaStage : 0)) % fallbackQuestions.length;
       setVivaQuestion(fallbackQuestions[idx]);
-      setVivaFeedback(null);
       setVivaAnswerInput('');
-      setVivaStage(1);
-      setVivaHistory([]);
+      if (!isReroll) {
+        setVivaFeedback(null);
+        setVivaStage(1);
+        setVivaHistory([]);
+      }
       setIsVivaActive(true);
       setIsVivaFinished(false);
     } finally {
@@ -1087,6 +1101,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleSelectRounds = async (newCount) => {
+    if (isSubmittingViva) return;
     setVivaTargetCount(newCount);
     if (isVivaActive) {
       await handleStartViva({ overrideTarget: newCount, overrideLevel: vivaLevel });
@@ -1094,6 +1109,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleSelectRigor = async (newLvl) => {
+    if (isSubmittingViva) return;
     setVivaLevel(newLvl);
     if (isVivaActive) {
       await handleStartViva({ overrideTarget: vivaTargetCount, overrideLevel: newLvl });
@@ -1101,12 +1117,13 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleRerollQuestion = async () => {
+    if (isSubmittingViva) return;
     await handleStartViva({ overrideTarget: vivaTargetCount, overrideLevel: vivaLevel, isReroll: true });
   };
 
   const handleSubmitVivaAnswer = async (e) => {
     e?.preventDefault();
-    if (!vivaAnswerInput.trim()) return;
+    if (isSubmittingViva || !vivaAnswerInput.trim()) return;
 
     const activeTopic = vivaTopic.trim() || customTopic.trim() || squad?.name || squad?.subject || 'Core Curriculum';
     try {
@@ -1296,7 +1313,8 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           squadName: squad?.name || 'StudySquad',
           sharedNotes: squad?.sharedNotes || '',
         },
-        history: newMessages,
+        // Strip historical base64 screenshots so follow-up messages stay tiny and never hit 413 Payload Too Large
+        history: newMessages.slice(-8).map(({ sender, text }) => ({ sender, text })),
         mode: 'chat',
       };
 
@@ -1951,7 +1969,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                   </div>
 
                   {/* BACK SIDE (ROTATED 180 DEG) */}
-                  <div className="absolute inset-0 p-6 sm:p-8 rounded-3xl backface-hidden rotate-y-180 flex flex-col justify-between bg-gradient-to-br from-[#121b18] via-neutral-900 to-black">
+                  <div className="absolute inset-0 p-6 sm:p-8 rounded-3xl backface-hidden rotate-y-180 flex flex-col justify-between overflow-y-auto bg-gradient-to-br from-[#121b18] via-neutral-900 to-black">
                     <div>
                       <div className="flex items-center justify-between mb-4">
                         <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-teal-500/20 text-teal-300 border border-teal-500/30 uppercase tracking-wider flex items-center gap-1">
@@ -2070,7 +2088,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                   {/* 4 Choices */}
                   <div className="space-y-2.5">
-                    {currentQuestion?.options?.map((option, optIdx) => {
+                    {(Array.isArray(currentQuestion?.options) ? currentQuestion.options : []).map((option, optIdx) => {
                       const isSelected = selectedAnswers[currentQuizIndex] === optIdx;
                       const isCorrect = optIdx === currentQuestion.answerIndex;
                       const hasChosen = hasAnsweredCurrent;
@@ -2201,11 +2219,12 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                   <button
                     type="button"
+                    disabled={isGenerating}
                     onClick={() => handleGenerate('quiz')}
-                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-violet-500/20 transition-all cursor-pointer"
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-violet-500/20 transition-all cursor-pointer"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>Generate New Quiz</span>
+                    <span>{isGenerating ? 'Generating...' : 'Generate New Quiz'}</span>
                   </button>
 
                   <button
@@ -2435,7 +2454,6 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 e.preventDefault();
                 handleSendChatMessage();
               }}
-              onPaste={handleChatPaste}
               className="p-3 sm:p-4 bg-black/40 border-t border-white/10 flex items-center gap-2"
             >
               {/* Hidden file input for screenshot upload */}
@@ -2508,8 +2526,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       <button
                         key={lvl}
                         type="button"
+                        disabled={isSubmittingViva}
                         onClick={() => handleSelectRigor(lvl)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 ${
                           vivaLevel === lvl
                             ? 'bg-rose-500 text-white shadow-sm shadow-rose-500/30'
                             : 'text-neutral-400 hover:text-white'
@@ -2534,8 +2553,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       <button
                         key={round.val}
                         type="button"
+                        disabled={isSubmittingViva}
                         onClick={() => handleSelectRounds(round.val)}
-                        className={`px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 ${
                           vivaTargetCount === round.val
                             ? 'bg-amber-400 text-neutral-950 border-amber-300 font-bold shadow-sm'
                             : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white'
@@ -2966,7 +2986,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       ⚠️ Top 3 Deadly Exam Pitfalls:
                     </p>
                     <ul className="space-y-2">
-                      {feynmanResult.examTraps?.map((trap, idx) => (
+                      {(Array.isArray(feynmanResult.examTraps) ? feynmanResult.examTraps : []).map((trap, idx) => (
                         <li key={idx} className="flex items-start gap-2.5 text-xs sm:text-sm text-neutral-300">
                           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                           <span>{renderInlineAcademicText(trap, 'amber')}</span>
@@ -3109,7 +3129,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 </p>
 
                 {/* Edge Cases */}
-                {auditResult.edgeCases && (
+                {Array.isArray(auditResult.edgeCases) && auditResult.edgeCases.length > 0 && (
                   <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 space-y-2">
                     <p className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5" />

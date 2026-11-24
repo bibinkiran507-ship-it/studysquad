@@ -19,11 +19,17 @@ const LATEX_ESCAPE_COLLISION_RE =
 
 export const cleanJson = (text) => {
   if (!text) return '';
-  const cleaned = String(text)
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/, '')
-    .replace(/```\s*$/, '')
-    .trim();
+  let cleaned = String(text).trim();
+  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced && fenced[1]) {
+    cleaned = fenced[1].trim();
+  } else {
+    cleaned = cleaned
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/, '')
+      .replace(/```\s*$/, '')
+      .trim();
+  }
 
   const firstBrace = cleaned.indexOf('{');
   const firstBracket = cleaned.indexOf('[');
@@ -50,29 +56,41 @@ export const cleanJson = (text) => {
   return latexProtected.replace(/(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 };
 
-const withTimeout = (promise, ms = 25000) =>
-  new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Gemini request timed out')), ms);
-    promise.then(
-      (val) => {
-        clearTimeout(timer);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
+const parseGeminiJson = (rawText) => {
+  if (!rawText) return null;
+  const trimmed = String(rawText).trim();
+  // Fast path: native JSON mode usually returns already-valid JSON (avoid mutating code escapes like \t)
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Continue to sanitization fallback
+  }
+  const cleaned = cleanJson(trimmed);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
+  }
+};
+
+// Singleton GoogleGenerativeAI client (avoids per-request re-instantiation)
+let cachedGenAI = null;
+let cachedGenAIKey = '';
+const getGenAIClient = () => {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') return null;
+  if (!cachedGenAI || cachedGenAIKey !== apiKey) {
+    cachedGenAI = new GoogleGenerativeAI(apiKey);
+    cachedGenAIKey = apiKey;
+  }
+  return cachedGenAI;
+};
 
 // Helper to initialize Gemini with active model support
 export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-    return null;
-  }
+  const genAI = getGenAIClient();
+  if (!genAI) return null;
   try {
-    const genAI = new GoogleGenerativeAI(apiKey.trim());
     return genAI.getGenerativeModel({ model: modelName });
   } catch (err) {
     console.error('Error initializing Gemini client:', err);
@@ -80,53 +98,66 @@ export const getGeminiModel = (modelName = 'gemini-flash-lite-latest') => {
   }
 };
 
-// Track models that recently timed out or returned 404/429 so students never hit repeated 20s stalls
-const MODEL_COOLDOWN_MS = 10 * 60 * 1000;
+// Smart cooldowns: 404 Not Found -> 10 min; transient 429/503/timeout -> 20s (never starve healthy fast model!)
+const NOT_FOUND_COOLDOWN_MS = 10 * 60 * 1000;
+const TRANSIENT_COOLDOWN_MS = 20 * 1000;
 const unhealthyModelUntil = new Map();
 
-// Resilient multi-model Gemini generator (fast verified models first + cooldown skipping + transient retry)
+// Resilient multi-model Gemini generator (fast verified models first + real AbortController + transient retry)
 export const generateWithGemini = async (contents, options = {}) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-    return null;
-  }
+  const genAI = getGenAIClient();
+  if (!genAI) return null;
+
+  const { timeoutMs = 16000, ...modelOptions } = options || {};
   const candidateModels = [
     'gemini-flash-lite-latest',
-    'gemini-3.5-flash-lite',
-    'gemini-3-flash-preview',
     'gemini-flash-latest',
+    'gemini-3-flash-preview',
+    'gemini-3.5-flash-lite',
   ];
   const now = Date.now();
   const healthy = candidateModels.filter((m) => (unhealthyModelUntil.get(m) || 0) <= now);
-  const orderedModels = healthy.length > 0 ? healthy : candidateModels;
-  const genAI = new GoogleGenerativeAI(apiKey.trim());
+  const orderedModels = healthy.length > 0 ? healthy : ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 
   for (const modelName of orderedModels) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const maxAttempts = modelName === 'gemini-flash-lite-latest' ? 2 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const model = genAI.getGenerativeModel({ model: modelName, ...options });
-        const result = await withTimeout(model.generateContent(contents), 18000);
+        const model = genAI.getGenerativeModel({ model: modelName, ...modelOptions });
+        const result = await model.generateContent(contents, { signal: controller.signal });
+        clearTimeout(timer);
         const text = result?.response?.text ? result.response.text() : '';
         if (text) {
           unhealthyModelUntil.delete(modelName);
           return { text, modelName };
         }
       } catch (err) {
+        clearTimeout(timer);
         const msg = String(err?.message || '');
-        if (
-          attempt === 0 &&
-          (msg.includes('503') || msg.includes('fetch failed') || msg.includes('ResourceExhausted'))
-        ) {
-          await new Promise((r) => setTimeout(r, 400));
+        const isAbort = err?.name === 'AbortError' || msg.includes('aborted') || msg.includes('timed out');
+        const isBadRequest = msg.includes('[400 ') || msg.includes('400 Bad Request');
+        if (isBadRequest) {
+          return null;
+        }
+        const isNotFound = msg.includes('[404 ') || msg.includes('404 Not Found');
+        const isTransient =
+          isAbort ||
+          msg.includes('503') ||
+          msg.includes('429') ||
+          msg.includes('fetch failed') ||
+          msg.includes('ResourceExhausted') ||
+          msg.includes('overloaded');
+
+        if (attempt + 1 < maxAttempts && isTransient && !isAbort) {
+          await new Promise((r) => setTimeout(r, 450));
           continue;
         }
-        if (
-          msg.includes('404') ||
-          msg.includes('429') ||
-          msg.includes('timed out') ||
-          msg.includes('Not Found')
-        ) {
-          unhealthyModelUntil.set(modelName, Date.now() + MODEL_COOLDOWN_MS);
+        if (isNotFound) {
+          unhealthyModelUntil.set(modelName, Date.now() + NOT_FOUND_COOLDOWN_MS);
+        } else if (isTransient) {
+          unhealthyModelUntil.set(modelName, Date.now() + TRANSIENT_COOLDOWN_MS);
         }
         break;
       }
@@ -150,12 +181,25 @@ router.post('/match', async (req, res) => {
       : [];
     const query = typeof rawBody.query === 'string' ? rawBody.query.slice(0, 300) : '';
 
-    // Fetch active squads from database (bounded for scale)
+    // Fetch active squads from database (bounded & omitting heavy/private sharedNotes)
     const squads = await withRetry(() =>
       prisma.squad.findMany({
         take: 60,
         orderBy: { createdAt: 'desc' },
-        include: {
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          subject: true,
+          description: true,
+          platform: true,
+          meetingUrl: true,
+          schedule: true,
+          maxMembers: true,
+          bannerGradient: true,
+          pinnedMessage: true,
+          ownerId: true,
+          createdAt: true,
           owner: { select: { id: true, name: true, avatar: true } },
           members: { include: { user: { select: { id: true, name: true, avatar: true } } } },
           tasks: true,
@@ -181,8 +225,7 @@ ${JSON.stringify(
     name: s.name,
     category: s.category,
     subject: s.subject,
-    description: s.description,
-    platform: s.platform,
+    description: String(s.description || '').slice(0, 180),
     schedule: s.schedule,
     currentMembers: s.members.length,
     maxMembers: s.maxMembers,
@@ -198,12 +241,16 @@ Respond ONLY with a valid JSON array in this format:
     "reason": "Directly focuses on your selected subjects and offers active evening sessions."
   }
 ]
-No markdown fences, no backticks, only raw JSON.
 `;
 
-      const geminiRes = await generateWithGemini(prompt);
+      const geminiRes = await generateWithGemini(prompt, {
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 1024,
+        },
+      });
       if (geminiRes && geminiRes.text) {
-        const parsed = JSON.parse(cleanJson(geminiRes.text));
+        const parsed = parseGeminiJson(geminiRes.text);
         if (Array.isArray(parsed)) {
           const matchedSquads = parsed
             .map((m) => {
@@ -308,12 +355,17 @@ Return ONLY a JSON array of 3 string items.
 Example: ["Solve 3 medium DP problems on LeetCode", "Complete mock interview on Graph traversal", "Review time complexity cheat sheet"]
 No extra text or backticks.
 `;
-      const geminiRes = await generateWithGemini(prompt);
+      const geminiRes = await generateWithGemini(prompt, {
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 512,
+        },
+      });
       if (geminiRes && geminiRes.text) {
-        const goals = JSON.parse(cleanJson(geminiRes.text));
+        const goals = parseGeminiJson(geminiRes.text);
         if (Array.isArray(goals) && goals.length > 0) {
           return res.json({
-            goals,
+            goals: goals.map((g) => String(g || '').trim()).filter(Boolean).slice(0, 5),
             poweredBy: `Google Gemini (${geminiRes.modelName})`,
           });
         }
@@ -517,14 +569,29 @@ Return ONLY a valid JSON array of 6 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-      const geminiRes = await generateWithGemini(prompt);
+      const geminiRes = await generateWithGemini(prompt, {
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 2048,
+        },
+      });
       if (geminiRes && geminiRes.text) {
-        const cards = JSON.parse(cleanJson(geminiRes.text));
-        if (Array.isArray(cards) && cards.length > 0) {
-          return res.json({
-            flashcards: cards,
-            poweredBy: `Google Gemini (${geminiRes.modelName})`,
-          });
+        const rawCards = parseGeminiJson(geminiRes.text);
+        if (Array.isArray(rawCards) && rawCards.length > 0) {
+          const cards = rawCards
+            .filter((c) => c && typeof c === 'object' && (c.front || c.question))
+            .map((c, idx) => ({
+              id: String(c.id || `fc-${idx + 1}`),
+              front: String(c.front || c.question || ''),
+              back: String(c.back || c.answer || ''),
+              tag: String(c.tag || 'Concept'),
+            }));
+          if (cards.length > 0) {
+            return res.json({
+              flashcards: cards,
+              poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            });
+          }
         }
       }
     } catch (geminiErr) {
@@ -699,15 +766,37 @@ Return ONLY a valid JSON array of 5 objects. No markdown backticks, no code fenc
   }
 ]
 `;
-      const geminiRes = await generateWithGemini(prompt);
+      const geminiRes = await generateWithGemini(prompt, {
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 2048,
+        },
+      });
       if (geminiRes && geminiRes.text) {
-        const quiz = JSON.parse(cleanJson(geminiRes.text));
-        if (Array.isArray(quiz) && quiz.length > 0) {
-          return res.json({
-            quiz,
-            questions: quiz,
-            poweredBy: `Google Gemini (${geminiRes.modelName})`,
-          });
+        const rawQuiz = parseGeminiJson(geminiRes.text);
+        if (Array.isArray(rawQuiz) && rawQuiz.length > 0) {
+          const quiz = rawQuiz
+            .filter((q) => q && typeof q === 'object' && q.question && Array.isArray(q.options) && q.options.length >= 2)
+            .map((q, idx) => {
+              const opts = q.options.slice(0, 4).map((o) => String(o));
+              const ansIdx = Number.isInteger(q.answerIndex) && q.answerIndex >= 0 && q.answerIndex < opts.length
+                ? q.answerIndex
+                : 0;
+              return {
+                id: String(q.id || `q-${idx + 1}`),
+                question: String(q.question),
+                options: opts,
+                answerIndex: ansIdx,
+                explanation: String(q.explanation || 'Review this core principle in your squad notes.'),
+              };
+            });
+          if (quiz.length > 0) {
+            return res.json({
+              quiz,
+              questions: quiz,
+              poweredBy: `Google Gemini (${geminiRes.modelName})`,
+            });
+          }
         }
       }
     } catch (geminiErr) {
@@ -977,6 +1066,7 @@ Guidelines for your response:
         generationConfig: {
           temperature: 0.75,
           topP: 0.95,
+          maxOutputTokens: 2048,
         },
       });
       if (geminiResult && geminiResult.text) {
@@ -1088,6 +1178,7 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       );
     }
 
+    let squadAccessVerified = false;
     if (resourceRecord?.squad) {
       const isAllowed =
         resourceRecord.squad.ownerId === req.user.id ||
@@ -1097,6 +1188,7 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
           error: 'Join this study squad first to analyze its uploaded documents.',
         });
       }
+      squadAccessVerified = true;
     } else if (squadId && typeof squadId === 'string') {
       const sq = await withRetry(() =>
         prisma.squad.findUnique({
@@ -1112,6 +1204,7 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
           error: 'Join this study squad first to analyze its uploaded documents.',
         });
       }
+      if (sq) squadAccessVerified = true;
     }
 
     const effectiveFileUrl = resourceRecord?.url || (typeof fileUrl === 'string' ? fileUrl : '');
@@ -1120,9 +1213,9 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       resourceRecord?.title ||
       'Study Document';
 
-    // Resolve local file path strictly within uploads directory (prevent path traversal)
+    // Resolve local file path strictly within uploads directory AND only after verified squad access
     let localFilePath = null;
-    if (effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
+    if (squadAccessVerified && effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
       const fileNameOnly = path.basename(effectiveFileUrl);
       const uploadsDir = process.env.UPLOADS_DIR
         ? path.resolve(process.env.UPLOADS_DIR)
@@ -1148,16 +1241,17 @@ Instructions:
 3. If the student asks a specific question, answer directly with slide/page/section context where visible.
 4. Format cleanly using Markdown with bullet points, bold terms, and code blocks if relevant.`;
 
-    if (localFilePath && fs.existsSync(localFilePath)) {
+    let attemptedGeminiOnDoc = false;
+    if (localFilePath) {
       try {
         const ext = path.extname(localFilePath).toLowerCase();
-        const stat = fs.statSync(localFilePath);
+        const stat = await fs.promises.stat(localFilePath);
 
         if (stat.size <= 20 * 1024 * 1024) {
           let geminiResult = null;
 
           if (ext === '.pdf' || ['.png', '.jpg', '.jpeg'].includes(ext)) {
-            const fileBuffer = fs.readFileSync(localFilePath);
+            const fileBuffer = await fs.promises.readFile(localFilePath);
             const mimeType =
               ext === '.pdf'
                 ? 'application/pdf'
@@ -1165,15 +1259,19 @@ Instructions:
                 ? 'image/png'
                 : 'image/jpeg';
 
-            geminiResult = await generateWithGemini([
-              docPrompt,
-              {
-                inlineData: {
-                  data: fileBuffer.toString('base64'),
-                  mimeType,
+            attemptedGeminiOnDoc = true;
+            geminiResult = await generateWithGemini(
+              [
+                docPrompt,
+                {
+                  inlineData: {
+                    data: fileBuffer.toString('base64'),
+                    mimeType,
+                  },
                 },
-              },
-            ]);
+              ],
+              { generationConfig: { maxOutputTokens: 2048 } }
+            );
           } else {
             // Office (.pptx, .docx) and text (.txt, .md, .csv, .json) — extract text cleanly!
             const extracted =
@@ -1189,8 +1287,10 @@ Instructions:
             }
 
             if (extracted) {
+              attemptedGeminiOnDoc = true;
               geminiResult = await generateWithGemini(
-                `${docPrompt}\n\nExtracted Document Content:\n"""\n${extracted.slice(0, 50000)}\n"""`
+                `${docPrompt}\n\nExtracted Document Content:\n"""\n${extracted.slice(0, 50000)}\n"""`,
+                { generationConfig: { maxOutputTokens: 2048 } }
               );
             }
           }
@@ -1209,10 +1309,12 @@ Instructions:
     }
 
     // Persisted PostgreSQL text path (survives Render container redeploys!)
-    if (resourceRecord?.extractedText && resourceRecord.extractedText.trim()) {
+    if (!attemptedGeminiOnDoc && resourceRecord?.extractedText && resourceRecord.extractedText.trim()) {
       try {
+        attemptedGeminiOnDoc = true;
         const geminiResult = await generateWithGemini(
-          `${docPrompt}\n\nExtracted Document Content:\n"""\n${resourceRecord.extractedText.slice(0, 50000)}\n"""`
+          `${docPrompt}\n\nExtracted Document Content:\n"""\n${resourceRecord.extractedText.slice(0, 50000)}\n"""`,
+          { generationConfig: { maxOutputTokens: 2048 } }
         );
         if (geminiResult && geminiResult.text) {
           return res.json({
@@ -1227,23 +1329,27 @@ Instructions:
     }
 
     // Topic-level academic fallback if file is an external link or legacy pre-persistence upload
-    try {
-      const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource titled "${effectiveTitle}"${
-        effectiveFileUrl.startsWith('http') ? ` (${effectiveFileUrl})` : ''
-      }.
+    if (!attemptedGeminiOnDoc) {
+      try {
+        const prompt = `You are StudySquad Document AI Assistant. The student is asking about their study resource titled "${effectiveTitle}"${
+          effectiveFileUrl.startsWith('http') ? ` (${effectiveFileUrl})` : ''
+        }.
 Student's Question: "${cleanQuery}"
 
 Provide a clear, detailed, academically rigorous explanation covering the concepts in "${effectiveTitle}". Format in clean Markdown with key takeaways and bullet points.`;
-      const geminiResult = await generateWithGemini(prompt);
-      if (geminiResult && geminiResult.text) {
-        return res.json({
-          answer: geminiResult.text,
-          fileName: effectiveTitle,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`,
+        const geminiResult = await generateWithGemini(prompt, {
+          generationConfig: { maxOutputTokens: 2048 },
         });
+        if (geminiResult && geminiResult.text) {
+          return res.json({
+            answer: geminiResult.text,
+            fileName: effectiveTitle,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`,
+          });
+        }
+      } catch (err) {
+        console.warn('Gemini fallback text call error:', err.message);
       }
-    } catch (err) {
-      console.warn('Gemini fallback text call error:', err.message);
     }
 
     const ext = effectiveTitle ? path.extname(effectiveTitle).toLowerCase() : '';
@@ -1372,11 +1478,16 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "keyConcept": "Concept tested"
 }`;
 
-    const geminiResult = await generateWithGemini(prompt);
+    const geminiResult = await generateWithGemini(prompt, {
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1024,
+      },
+    });
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = JSON.parse(cleanJson(geminiResult.text));
-        if (parsed.nextQuestion) {
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && parsed.nextQuestion) {
           return res.json({
             ...parsed,
             poweredBy: `Google Gemini (${geminiResult.modelName})`
@@ -1467,7 +1578,11 @@ Format cleanly in Markdown with bold headers, bullet points, and clear code/math
 
 IMPORTANT FORMATTING RULE: Write math and complexity expressions in clean, human-readable Unicode (such as O(1), O(n), O(log n), O(n²), O(V + E), 2×, ≤, ≥, →, ⇒, ∞, √n) instead of raw LaTeX backslash commands (never write \\frac, \\lim, \\implies, \\times, or $...$ wrappers). Make it dense, rigorous, practical, and easy to scan on exam day.`;
 
-    const geminiResult = await generateWithGemini(prompt);
+    const geminiResult = await generateWithGemini(prompt, {
+      generationConfig: {
+        maxOutputTokens: 3072,
+      },
+    });
     if (geminiResult && geminiResult.text) {
       return res.json({
         cheatSheet: geminiResult.text,
@@ -1537,21 +1652,28 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "oneLineTakeaway": "Memorable one-line summary..."
 }`;
 
-    const geminiResult = await generateWithGemini(prompt);
+    const geminiResult = await generateWithGemini(prompt, {
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1536,
+      },
+    });
     if (geminiResult && geminiResult.text) {
       try {
-        const cleaned = cleanJson(geminiResult.text);
-        let parsed;
-        try {
-          parsed = JSON.parse(cleaned);
-        } catch {
-          // If strict parse failed due to unescaped internal raw line breaks, normalize them
-          parsed = JSON.parse(cleaned.replace(/(?<!\\)[\r\n]+/g, ' '));
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && (parsed.eli5 || parsed.mechanics)) {
+          const examTraps = Array.isArray(parsed.examTraps)
+            ? parsed.examTraps.map((t) => String(t))
+            : parsed.examTraps
+            ? [String(parsed.examTraps)]
+            : [];
+          return res.json({
+            ...parsed,
+            concept: String(parsed.concept || concept.trim()),
+            examTraps,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`
+          });
         }
-        return res.json({
-          ...parsed,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`
-        });
       } catch (parseErr) {
         console.warn('Gemini feynman JSON parse failed:', parseErr.message);
       }
@@ -1611,14 +1733,27 @@ Respond ONLY with a valid JSON object in this format (no markdown backticks, no 
   "keyAdvice": "Key takeaway advice..."
 }`;
 
-    const geminiResult = await generateWithGemini(prompt);
+    const geminiResult = await generateWithGemini(prompt, {
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 2048,
+      },
+    });
     if (geminiResult && geminiResult.text) {
       try {
-        const parsed = JSON.parse(cleanJson(geminiResult.text));
-        return res.json({
-          ...parsed,
-          poweredBy: `Google Gemini (${geminiResult.modelName})`
-        });
+        const parsed = parseGeminiJson(geminiResult.text);
+        if (parsed && typeof parsed === 'object' && parsed.status) {
+          const edgeCases = Array.isArray(parsed.edgeCases)
+            ? parsed.edgeCases.map((ec) => String(ec))
+            : parsed.edgeCases
+            ? [String(parsed.edgeCases)]
+            : [];
+          return res.json({
+            ...parsed,
+            edgeCases,
+            poweredBy: `Google Gemini (${geminiResult.modelName})`
+          });
+        }
       } catch (parseErr) {
         console.warn('Gemini code audit parse failed:', parseErr.message);
       }

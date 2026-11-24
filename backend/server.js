@@ -92,7 +92,13 @@ app.use(
 // Canonical Redirect: Automatically route any onrender.com visits to official domain https://studysquadai.com
 app.use((req, res, next) => {
   const host = (req.headers.host || '').toLowerCase();
-  if (host.includes('onrender.com') && !req.path.startsWith('/api') && req.path !== '/health') {
+  if (
+    host.includes('onrender.com') &&
+    !req.path.startsWith('/api') &&
+    !req.path.startsWith('/socket.io') &&
+    !req.path.startsWith('/uploads') &&
+    req.path !== '/health'
+  ) {
     return res.redirect(301, `https://studysquadai.com${req.originalUrl}`);
   }
   next();
@@ -184,6 +190,8 @@ app.use('/api', generalApiLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/reset-password', authLimiter);
+app.use('/api/auth/google', authLimiter);
 app.use('/api/ai', aiLimiter);
 app.use('/api/events/ai-study-plan', aiLimiter);
 
@@ -340,13 +348,47 @@ io.use(async (socket, next) => {
   return next();
 });
 
+// Safe payload normalizer (prevents uncaught TypeError when a client emits null)
+const asObj = (p) => (p && typeof p === 'object' && !Array.isArray(p) ? p : {});
+const MAX_WHITEBOARD_ROOMS = 100;
+const sanitizeStroke = (s) => {
+  if (!s || typeof s !== 'object') return null;
+  const prevX = typeof s.prevX === 'number' ? s.prevX : s.x1;
+  const prevY = typeof s.prevY === 'number' ? s.prevY : s.y1;
+  const currX = typeof s.currX === 'number' ? s.currX : s.x2;
+  const currY = typeof s.currY === 'number' ? s.currY : s.y2;
+  if (
+    !Number.isFinite(prevX) ||
+    !Number.isFinite(prevY) ||
+    !Number.isFinite(currX) ||
+    !Number.isFinite(currY)
+  ) {
+    return null;
+  }
+  return {
+    prevX,
+    prevY,
+    currX,
+    currY,
+    color: typeof s.color === 'string' ? s.color.slice(0, 32) : '#FFFFFF',
+    size: Number.isFinite(s.size) ? Math.max(1, Math.min(48, s.size)) : 4,
+    isEraser: Boolean(s.isEraser),
+  };
+};
+const toPublicUser = (u, fallbackId) => ({
+  id: u?.id || fallbackId,
+  name: typeof u?.name === 'string' && u.name.trim() ? u.name.trim().slice(0, 80) : 'Guest Explorer',
+  avatar: typeof u?.avatar === 'string' ? u.avatar.slice(0, 512) : '',
+});
+
 // Real-Time Socket.io Connection & Study Rooms
 io.on('connection', (socket) => {
   socket.emit('global_presence_update', buildGlobalPresenceSummary());
 
   // Join a squad study room
-  socket.on('join_room', async ({ squadId, user, squadName, subject } = {}) => {
+  socket.on('join_room', async (raw) => {
     try {
+      const { squadId, user, squadName, subject } = asObj(raw);
       if (!squadId || typeof squadId !== 'string') return;
 
       // Clean up prior room if this socket switched directly from another squad room
@@ -365,11 +407,8 @@ io.on('connection', (socket) => {
 
       socket.join(squadId);
 
-      const resolvedUser = socket.authUser || user;
       const cleanUser = {
-        id: resolvedUser?.id || 'guest-' + socket.id,
-        name: resolvedUser?.name || 'Guest Explorer',
-        avatar: resolvedUser?.avatar || '',
+        ...toPublicUser(socket.authUser || user, 'guest-' + socket.id),
         joinedAt: new Date().toISOString(),
       };
 
@@ -386,31 +425,34 @@ io.on('connection', (socket) => {
           message: `${cleanUser.name} has joined the study room!`,
         });
 
-        let resolvedSquadName = squadName;
-        let resolvedSubject = subject;
-        if (!resolvedSquadName) {
-          try {
-            const sq = await prisma.squad.findUnique({
-              where: { id: squadId },
-              select: { name: true, subject: true },
-            });
-            if (sq) {
-              resolvedSquadName = sq.name;
-              resolvedSubject = sq.subject;
-            }
-          } catch {}
-        }
+        // Only authenticated users broadcast live study activity toasts globally (prevents guest spoofing)
+        if (socket.authUser) {
+          let resolvedSquadName = typeof squadName === 'string' ? squadName.slice(0, 120) : '';
+          let resolvedSubject = typeof subject === 'string' ? subject.slice(0, 100) : '';
+          if (!resolvedSquadName) {
+            try {
+              const sq = await prisma.squad.findUnique({
+                where: { id: squadId },
+                select: { name: true, subject: true },
+              });
+              if (sq) {
+                resolvedSquadName = sq.name;
+                resolvedSubject = sq.subject;
+              }
+            } catch {}
+          }
 
-        socket.broadcast.emit('global_user_started_study', {
-          id: `live-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          userId: cleanUser.id,
-          userName: cleanUser.name,
-          userAvatar: cleanUser.avatar,
-          squadId,
-          squadName: resolvedSquadName || 'Study Room',
-          subject: resolvedSubject || 'Active Study Session',
-          timestamp: new Date().toISOString(),
-        });
+          socket.broadcast.emit('global_user_started_study', {
+            id: `live-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            userId: cleanUser.id,
+            userName: cleanUser.name,
+            userAvatar: cleanUser.avatar,
+            squadId,
+            squadName: resolvedSquadName || 'Study Room',
+            subject: resolvedSubject || 'Active Study Session',
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
 
       broadcastPresence(squadId);
@@ -425,15 +467,17 @@ io.on('connection', (socket) => {
   });
 
   // Explicit whiteboard history pull (used when Whiteboard tab mounts after join_room)
-  socket.on('whiteboard_request_init', ({ squadId } = {}) => {
-    if (!squadId) return;
+  socket.on('whiteboard_request_init', (raw) => {
+    const { squadId } = asObj(raw);
+    if (!squadId || typeof squadId !== 'string') return;
     socket.emit('whiteboard_init', squadWhiteboards.get(squadId) || []);
   });
 
   // Leave squad room
-  socket.on('leave_room', ({ squadId, user } = {}) => {
+  socket.on('leave_room', (raw) => {
     try {
-      if (!squadId) return;
+      const { squadId, user } = asObj(raw);
+      if (!squadId || typeof squadId !== 'string') return;
       socket.leave(squadId);
 
       if (activeSquadPresence.has(squadId)) {
@@ -442,11 +486,15 @@ io.on('connection', (socket) => {
           activeSquadPresence.delete(squadId);
         }
       }
-      socketPresenceMap.delete(socket.id);
+      const prev = socketPresenceMap.get(socket.id);
+      if (prev && prev.squadId === squadId) {
+        socketPresenceMap.delete(socket.id);
+      }
 
+      const publicLeaver = toPublicUser(socket.authUser || user, 'guest-' + socket.id);
       socket.to(squadId).emit('user_left', {
-        user: socket.authUser || user,
-        message: `${(socket.authUser || user)?.name || 'A teammate'} left the room.`,
+        user: publicLeaver,
+        message: `${publicLeaver.name || 'A teammate'} left the room.`,
       });
 
       broadcastPresence(squadId);
@@ -456,7 +504,8 @@ io.on('connection', (socket) => {
   });
 
   // Real-time Chat message (strictly authenticated via JWT & persisted in PostgreSQL before broadcasting)
-  socket.on('send_message', async ({ squadId, content } = {}) => {
+  socket.on('send_message', async (raw) => {
+    const { squadId, content } = asObj(raw);
     const effectiveUserId = socket.authUser?.id;
     if (!effectiveUserId) {
       socket.emit('message_error', {
@@ -498,7 +547,8 @@ io.on('connection', (socket) => {
   });
 
   // Synced Pomodoro Timer (authenticated users only)
-  socket.on('pomodoro_action', ({ squadId, action, timeLeft, mode } = {}) => {
+  socket.on('pomodoro_action', (raw) => {
+    const { squadId, action, timeLeft, mode } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     socket.to(squadId).emit('pomodoro_sync', {
       action,
@@ -508,45 +558,47 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Collaborative Real-Time Whiteboard: Draw stroke (authenticated users only)
-  socket.on('whiteboard_draw', ({ squadId, stroke, strokes: batchStrokes } = {}) => {
+  // Collaborative Real-Time Whiteboard: Draw stroke (authenticated users only + bounded LRU cache)
+  socket.on('whiteboard_draw', (raw) => {
+    const { squadId, stroke, strokes: batchStrokes } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
-    const incoming = Array.isArray(batchStrokes)
+    const rawIncoming = Array.isArray(batchStrokes)
       ? batchStrokes.slice(0, 200)
       : stroke
       ? [stroke]
       : [];
-    if (incoming.length === 0) return;
+    if (rawIncoming.length === 0) return;
+
+    const cleanStrokes = rawIncoming.map(sanitizeStroke).filter(Boolean);
+    if (cleanStrokes.length === 0) return;
 
     if (!squadWhiteboards.has(squadId)) {
+      if (squadWhiteboards.size >= MAX_WHITEBOARD_ROOMS) {
+        const oldestKey = squadWhiteboards.keys().next().value;
+        if (oldestKey) squadWhiteboards.delete(oldestKey);
+      }
       squadWhiteboards.set(squadId, []);
     }
     const roomStrokes = squadWhiteboards.get(squadId);
-    for (const s of incoming) {
-      if (s && typeof s.x1 === 'number' && typeof s.y1 === 'number') {
-        roomStrokes.push(s);
-      }
-    }
-    if (roomStrokes.length > 4000) {
+    roomStrokes.push(...cleanStrokes);
+    if (roomStrokes.length > 3500) {
       roomStrokes.splice(0, roomStrokes.length - 3000);
     }
 
-    if (Array.isArray(batchStrokes)) {
-      socket.to(squadId).emit('whiteboard_draw_batch', incoming);
-    } else if (stroke) {
-      socket.to(squadId).emit('whiteboard_draw', stroke);
-    }
+    socket.to(squadId).emit('whiteboard_draw', cleanStrokes.length === 1 ? cleanStrokes[0] : cleanStrokes);
   });
 
   // Collaborative Real-Time Whiteboard: Clear canvas (authenticated users only)
-  socket.on('whiteboard_clear', ({ squadId } = {}) => {
+  socket.on('whiteboard_clear', (raw) => {
+    const { squadId } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     squadWhiteboards.delete(squadId);
     socket.to(squadId).emit('whiteboard_clear');
   });
 
   // Collaborative Real-Time Shared Notes (authenticated users only)
-  socket.on('notes_update', ({ squadId, notes } = {}) => {
+  socket.on('notes_update', (raw) => {
+    const { squadId, notes } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string' || typeof notes !== 'string') return;
     socket.to(squadId).emit('notes_sync', {
       notes: notes.slice(0, 100_000),
@@ -555,24 +607,26 @@ io.on('connection', (socket) => {
   });
 
   // Real-Time Study Resource Updates (authenticated users only)
-  socket.on('resource_action', ({ squadId, action, resource, resourceId } = {}) => {
+  socket.on('resource_action', (raw) => {
+    const { squadId, action, resource, resourceId } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     socket.to(squadId).emit('resource_sync', { action, resource, resourceId });
   });
 
-  // Real-Time Study Calendar & Exam Countdown Updates (authenticated users only)
-  socket.on('calendar_event_action', ({ squadId, action, event, eventId } = {}) => {
+  // Real-Time Study Calendar & Exam Countdown Updates (authenticated users only, room-scoped)
+  socket.on('calendar_event_action', (raw) => {
+    const { squadId, action, event, eventId } = asObj(raw);
     if (!socket.authUser) return;
-    if (squadId) {
+    if (squadId && typeof squadId === 'string') {
       io.to(squadId).emit('calendar_sync', { squadId, action, event, eventId });
-      socket.emit('calendar_sync', { squadId, action, event, eventId });
     } else {
-      io.emit('calendar_sync', { squadId, action, event, eventId });
+      socket.emit('calendar_sync', { squadId: null, action, event, eventId });
     }
   });
 
   // WebRTC In-Room Video Call Signaling (authenticated users only)
-  socket.on('join_video_call', ({ squadId, initialState } = {}) => {
+  socket.on('join_video_call', (raw) => {
+    const { squadId, initialState } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
     const videoRoomKey = `video_${squadId}`;
     socket.join(videoRoomKey);
@@ -581,11 +635,7 @@ io.on('connection', (socket) => {
       activeVideoRooms.set(squadId, new Map());
     }
 
-    const cleanUser = {
-      id: socket.authUser.id,
-      name: socket.authUser.name || 'Squad Member',
-      avatar: socket.authUser.avatar || '',
-    };
+    const cleanUser = toPublicUser(socket.authUser, socket.id);
 
     const peerInfo = {
       user: cleanUser,
@@ -626,45 +676,53 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Relay WebRTC SDP Offers, Answers, and ICE Candidates between authenticated peers
-  socket.on('video_signal_send', ({ to, signal } = {}) => {
-    if (!socket.authUser || !to || !signal) return;
+  // Relay WebRTC SDP Offers, Answers, and ICE Candidates between authenticated peers sharing a video room
+  socket.on('video_signal_send', (raw) => {
+    const { to, signal } = asObj(raw);
+    if (!socket.authUser || typeof to !== 'string' || !to || !signal) return;
+    let sharesVideoRoom = false;
+    for (const roomMap of activeVideoRooms.values()) {
+      if (roomMap.has(socket.id) && roomMap.has(to)) {
+        sharesVideoRoom = true;
+        break;
+      }
+    }
+    if (!sharesVideoRoom) return;
     io.to(to).emit('video_signal_receive', {
       from: socket.id,
       signal,
-      user: socket.authUser,
+      user: toPublicUser(socket.authUser, socket.id),
     });
   });
 
   // Relay peer state changes (mic mute, camera off, screen share, raise hand)
-  socket.on(
-    'video_peer_state',
-    ({ squadId, audioMuted, videoMuted, isScreenSharing, isHandRaised } = {}) => {
-      if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
-      const roomMap = activeVideoRooms.get(squadId);
-      if (roomMap && roomMap.has(socket.id)) {
-        const prev = roomMap.get(socket.id);
-        roomMap.set(socket.id, {
-          ...prev,
-          audioMuted: audioMuted ?? prev.audioMuted,
-          videoMuted: videoMuted ?? prev.videoMuted,
-          isScreenSharing: isScreenSharing ?? prev.isScreenSharing,
-          isHandRaised: isHandRaised ?? prev.isHandRaised,
-        });
-      }
-
-      socket.to(`video_${squadId}`).emit('video_peer_state_changed', {
-        socketId: socket.id,
-        audioMuted,
-        videoMuted,
-        isScreenSharing,
-        isHandRaised,
+  socket.on('video_peer_state', (raw) => {
+    const { squadId, audioMuted, videoMuted, isScreenSharing, isHandRaised } = asObj(raw);
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
+    const roomMap = activeVideoRooms.get(squadId);
+    if (roomMap && roomMap.has(socket.id)) {
+      const prev = roomMap.get(socket.id);
+      roomMap.set(socket.id, {
+        ...prev,
+        audioMuted: audioMuted ?? prev.audioMuted,
+        videoMuted: videoMuted ?? prev.videoMuted,
+        isScreenSharing: isScreenSharing ?? prev.isScreenSharing,
+        isHandRaised: isHandRaised ?? prev.isHandRaised,
       });
     }
-  );
+
+    socket.to(`video_${squadId}`).emit('video_peer_state_changed', {
+      socketId: socket.id,
+      audioMuted,
+      videoMuted,
+      isScreenSharing,
+      isHandRaised,
+    });
+  });
 
   // Relay live emoji reactions in video room
-  socket.on('video_send_reaction', ({ squadId, emoji } = {}) => {
+  socket.on('video_send_reaction', (raw) => {
+    const { squadId, emoji } = asObj(raw);
     if (!socket.authUser || !squadId || typeof squadId !== 'string' || !emoji) return;
     io.to(`video_${squadId}`).emit('video_receive_reaction', {
       id: 'reaction-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
@@ -675,8 +733,9 @@ io.on('connection', (socket) => {
   });
 
   // Leave Video Call explicitly
-  socket.on('leave_video_call', ({ squadId } = {}) => {
-    if (!squadId) return;
+  socket.on('leave_video_call', (raw) => {
+    const { squadId } = asObj(raw);
+    if (!squadId || typeof squadId !== 'string') return;
     const videoRoomKey = `video_${squadId}`;
     socket.leave(videoRoomKey);
 
@@ -729,7 +788,7 @@ server.listen(PORT, () => {
   if (process.env.NODE_ENV === 'production') {
     const KEEP_ALIVE_URL = 'https://studysquadai.com/api/health';
     setInterval(() => {
-      fetch(KEEP_ALIVE_URL).catch(() => {});
+      fetch(KEEP_ALIVE_URL, { signal: AbortSignal.timeout(10000) }).catch(() => {});
     }, 13 * 60 * 1000); // Every 13 minutes (under Render's 15-minute idle spin-down threshold)
   }
 });

@@ -139,7 +139,7 @@ function PdfSlideCard({ res, user, squad, onDelete, onChatWithDoc }) {
           {res.title}
         </h5>
         <p className="text-[11px] font-mono text-neutral-400 mt-1 truncate">
-          {res.url.replace(/^\/uploads\//, "")}
+          {String(res.url || "").replace(/^\/uploads\//, "")}
         </p>
       </div>
 
@@ -479,14 +479,14 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
   };
 
   const copyAnswer = (text, idx) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText(text)?.catch(() => {});
     setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md">
-      <div className="bg-neutral-900 border border-violet-500/30 w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col h-[600px] overflow-hidden">
+      <div className="bg-neutral-900 border border-violet-500/30 w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col h-[600px] max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-white/10 bg-white/5 flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -648,19 +648,27 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
   const [fileCategory, setFileCategory] = useState("PDF");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [isSubmittingResource, setIsSubmittingResource] = useState(false);
   const fileInputRef = useRef(null);
+  const githubTimerRef = useRef(null);
+  const githubAbortRef = useRef(null);
 
   useEffect(() => {
-    if (squad?.id) {
-      setLoadingResources(true);
-      squadsAPI
-        .getResources(squad.id)
-        .then((res) => {
-          if (res.data?.resources) setResources(res.data.resources);
-        })
-        .catch((err) => console.warn("Fetch resources warning:", err.message))
-        .finally(() => setLoadingResources(false));
-    }
+    if (!squad?.id) return undefined;
+    let isCurrent = true;
+    setLoadingResources(true);
+    squadsAPI
+      .getResources(squad.id)
+      .then((res) => {
+        if (isCurrent && res.data?.resources) setResources(res.data.resources);
+      })
+      .catch((err) => console.warn("Fetch resources warning:", err.message))
+      .finally(() => {
+        if (isCurrent) setLoadingResources(false);
+      });
+    return () => {
+      isCurrent = false;
+    };
   }, [squad?.id]);
 
   useEffect(() => {
@@ -689,25 +697,38 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
     };
   }, [socket]);
 
-  const handleUrlChange = async (e) => {
+  const handleUrlChange = (e) => {
     const val = e.target.value;
     setResourceUrl(val);
+    if (githubTimerRef.current) clearTimeout(githubTimerRef.current);
+    if (githubAbortRef.current) {
+      githubAbortRef.current.abort();
+      githubAbortRef.current = null;
+    }
     if (isGitHubUrl(val)) {
       setResourceCategory("GitHub");
       const parsed = parseGitHubRepo(val);
       if (parsed && !resourceTitle) {
-        setIsFetchingGitHub(true);
-        try {
-          const r = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`);
-          if (r.ok) {
-            const data = await r.json();
-            setResourceTitle(data.full_name || `${parsed.owner}/${parsed.repo}`);
+        githubTimerRef.current = setTimeout(async () => {
+          const controller = new AbortController();
+          githubAbortRef.current = controller;
+          setIsFetchingGitHub(true);
+          try {
+            const r = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`, {
+              signal: controller.signal,
+            });
+            if (r.ok) {
+              const data = await r.json();
+              setResourceTitle((prev) => prev || data.full_name || `${parsed.owner}/${parsed.repo}`);
+            }
+          } catch (err) {
+            if (err?.name !== "AbortError") {
+              setResourceTitle((prev) => prev || `${parsed.owner}/${parsed.repo}`);
+            }
+          } finally {
+            setIsFetchingGitHub(false);
           }
-        } catch {
-          setResourceTitle(`${parsed.owner}/${parsed.repo}`);
-        } finally {
-          setIsFetchingGitHub(false);
-        }
+        }, 450);
       }
     }
   };
@@ -716,6 +737,8 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
+      if (githubTimerRef.current) clearTimeout(githubTimerRef.current);
+      if (githubAbortRef.current) githubAbortRef.current.abort();
     };
   }, []);
 
@@ -763,7 +786,7 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
   };
 
   const handleCopyNotes = () => {
-    navigator.clipboard.writeText(notes);
+    navigator.clipboard?.writeText(notes)?.catch(() => {});
     setCopiedNotes(true);
     setTimeout(() => setCopiedNotes(false), 2000);
   };
@@ -780,11 +803,12 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
 
   const handleAddResource = async (e) => {
     e.preventDefault();
-    if (!resourceTitle.trim() && !resourceUrl.trim()) return;
+    if (isSubmittingResource || (!resourceTitle.trim() && !resourceUrl.trim())) return;
     if (!user) {
       openAuthModal?.("login");
       return;
     }
+    setIsSubmittingResource(true);
     try {
       const payload = {
         title: resourceTitle.trim() || resourceUrl.trim(),
@@ -801,6 +825,8 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
       setIsAddingResource(false);
     } catch (err) {
       console.error("Failed to add resource:", err);
+    } finally {
+      setIsSubmittingResource(false);
     }
   };
 

@@ -35,6 +35,10 @@ router.get('/', optionalAuth, async (req, res) => {
 
     if (userId && typeof userId === 'string') {
       where.userId = userId;
+      // Never expose another user's private personal milestones (squadId: null)
+      if (!req.user?.id || req.user.id !== userId) {
+        where.squadId = { not: null };
+      }
     } else if (!squadId) {
       // Return public squad events plus the logged-in student's personal milestones
       if (req.user?.id) {
@@ -340,23 +344,29 @@ router.post('/ai-study-plan', optionalAuth, enforceAiLimit, async (req, res) => 
     const { examTitle, subject, daysLeft = 7, targetScore = 'A' } = req.body || {};
     const safeDays = Math.max(1, Math.min(365, Number(daysLeft) || 7));
 
+    const safeTitle = typeof examTitle === 'string' && examTitle.trim() ? examTitle.trim().slice(0, 140) : 'Final Exam';
+    const safeSubject = typeof subject === 'string' && subject.trim() ? subject.trim().slice(0, 100) : 'Coursework';
+    const safeTarget = typeof targetScore === 'string' && targetScore.trim() ? targetScore.trim().slice(0, 40) : 'A';
+
     const prompt = `You are StudySquad AI Academic Coach.
 A student is preparing for an upcoming exam:
-- Exam: "${examTitle || 'Final Exam'}"
-- Subject: "${subject || 'Coursework'}"
+- Exam: "${safeTitle}"
+- Subject: "${safeSubject}"
 - Days Remaining: ${safeDays} days
-- Target Grade / Goal: "${targetScore}"
+- Target Grade / Goal: "${safeTarget}"
 
 Create a high-impact, day-by-day Countdown Study Plan.
 Include:
 1. 🎯 Strategic Breakdown (High-yield focus topics)
 2. 🗓️ Daily Milestone Roadmap (What to accomplish each day from now until exam day)
-3. ⚠️ 3 Critical Exam Traps to avoid in ${subject || 'this subject'}
+3. ⚠️ 3 Critical Exam Traps to avoid in ${safeSubject}
 4. 💡 Active Recall & Spaced Repetition strategy
 
 Format cleanly with Markdown, emojis, and clear bullet points.`;
 
-    const geminiRes = await generateWithGemini(prompt);
+    const geminiRes = await generateWithGemini(prompt, {
+      generationConfig: { maxOutputTokens: 1536 },
+    });
     if (geminiRes && geminiRes.text) {
       return res.json({
         plan: geminiRes.text,

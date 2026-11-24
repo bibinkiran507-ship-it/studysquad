@@ -3,7 +3,9 @@ import path from 'path';
 import zlib from 'zlib';
 
 const MAX_EXTRACTED_CHARS = 60_000;
-const MAX_XML_ENTRY_UNCOMPRESSED = 15 * 1024 * 1024; // 15 MB zip-bomb guard
+const MAX_XML_ENTRY_UNCOMPRESSED = 15 * 1024 * 1024; // 15 MB per-entry zip-bomb guard
+const MAX_TOTAL_UNCOMPRESSED_BYTES = 25 * 1024 * 1024; // 25 MB cumulative zip-bomb guard
+const MAX_MATCHING_ENTRIES = 200;
 
 const decodeXmlEntities = (str) =>
   str
@@ -54,8 +56,10 @@ function readZipXmlEntries(zipBuf, entryMatcher) {
 
   const results = [];
   let pos = cdOffset;
+  let cumulativeUncompressed = 0;
 
   for (let idx = 0; idx < totalEntries && pos + 46 <= zipBuf.length; idx++) {
+    if (results.length >= MAX_MATCHING_ENTRIES) break;
     if (zipBuf.readUInt32LE(pos) !== 0x02014b50) break;
 
     const method = zipBuf.readUInt16LE(pos + 10);
@@ -71,6 +75,8 @@ function readZipXmlEntries(zipBuf, entryMatcher) {
 
     if (!entryMatcher(entryName)) continue;
     if (uncompSize > MAX_XML_ENTRY_UNCOMPRESSED) continue;
+    const remainingBudget = MAX_TOTAL_UNCOMPRESSED_BYTES - cumulativeUncompressed;
+    if (remainingBudget <= 0) break;
     if (localOffset + 30 > zipBuf.length) continue;
     if (zipBuf.readUInt32LE(localOffset) !== 0x04034b50) continue;
 
@@ -82,14 +88,20 @@ function readZipXmlEntries(zipBuf, entryMatcher) {
     const rawSlice = zipBuf.subarray(dataStart, dataStart + compSize);
     try {
       let xml = '';
+      let inflatedBytes = 0;
       if (method === 0) {
+        if (rawSlice.length > remainingBudget) continue;
+        inflatedBytes = rawSlice.length;
         xml = rawSlice.toString('utf8');
       } else if (method === 8) {
-        xml = zlib
-          .inflateRawSync(rawSlice, { maxOutputLength: MAX_XML_ENTRY_UNCOMPRESSED })
-          .toString('utf8');
+        const inflated = zlib.inflateRawSync(rawSlice, {
+          maxOutputLength: Math.min(MAX_XML_ENTRY_UNCOMPRESSED, remainingBudget),
+        });
+        inflatedBytes = inflated.length;
+        xml = inflated.toString('utf8');
       }
       if (xml) {
+        cumulativeUncompressed += inflatedBytes;
         results.push({ name: entryName, xml });
       }
     } catch {

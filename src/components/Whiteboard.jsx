@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, memo } from 'react';
 import {
   Pen,
   Eraser,
@@ -23,7 +23,7 @@ const STROKE_SIZES = [
   { label: 'Marker', value: 16 },
 ];
 
-export default function Whiteboard({ socket, squadId }) {
+const Whiteboard = memo(function Whiteboard({ socket, squadId }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const rectRef = useRef({ left: 0, top: 0, width: 0, height: 0 });
@@ -188,6 +188,7 @@ export default function Whiteboard({ socket, squadId }) {
     };
 
     socket.on('whiteboard_draw', handleRemoteDraw);
+    socket.on('whiteboard_draw_batch', handleRemoteDraw);
     socket.on('whiteboard_init', handleRemoteInit);
     socket.on('whiteboard_clear', handleRemoteClear);
 
@@ -196,6 +197,7 @@ export default function Whiteboard({ socket, squadId }) {
 
     return () => {
       socket.off('whiteboard_draw', handleRemoteDraw);
+      socket.off('whiteboard_draw_batch', handleRemoteDraw);
       socket.off('whiteboard_init', handleRemoteInit);
       socket.off('whiteboard_clear', handleRemoteClear);
     };
@@ -286,13 +288,12 @@ export default function Whiteboard({ socket, squadId }) {
   const handleMouseUp = () => stopDrawing();
   const handleMouseLeave = () => stopDrawing();
 
-  // Touch Handlers for tablets / mobile (ignore multi-touch pinch/zoom)
+  // Touch Handlers for tablets / mobile (touch-none CSS handles scroll lock cleanly without passive warnings)
   const handleTouchStart = (e) => {
     if (e.touches.length > 1) {
       isDrawingRef.current = false;
       return;
     }
-    e.preventDefault();
     const touch = e.touches[0];
     startDrawing(touch.clientX, touch.clientY);
   };
@@ -302,13 +303,11 @@ export default function Whiteboard({ socket, squadId }) {
       isDrawingRef.current = false;
       return;
     }
-    e.preventDefault();
     const touch = e.touches[0];
     draw(touch.clientX, touch.clientY);
   };
 
-  const handleTouchEnd = (e) => {
-    e.preventDefault();
+  const handleTouchEnd = () => {
     stopDrawing();
   };
 
@@ -483,4 +482,6 @@ export default function Whiteboard({ socket, squadId }) {
       </div>
     </div>
   );
-}
+});
+
+export default Whiteboard;
