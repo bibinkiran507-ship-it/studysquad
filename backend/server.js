@@ -511,31 +511,49 @@ io.on('connection', (socket) => {
   // Collaborative Real-Time Whiteboard: Draw stroke (authenticated users only)
   socket.on('whiteboard_draw', ({ squadId, stroke, strokes: batchStrokes } = {}) => {
     if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
-    const incoming = Array.isArray(batchStrokes)
+    const rawIncoming = Array.isArray(batchStrokes)
       ? batchStrokes.slice(0, 200)
       : stroke
       ? [stroke]
       : [];
-    if (incoming.length === 0) return;
+    if (rawIncoming.length === 0) return;
+
+    const cleanStrokes = [];
+    for (const s of rawIncoming) {
+      if (!s || typeof s !== 'object') continue;
+      const prevX = typeof s.prevX === 'number' ? s.prevX : s.x1;
+      const prevY = typeof s.prevY === 'number' ? s.prevY : s.y1;
+      const currX = typeof s.currX === 'number' ? s.currX : s.x2;
+      const currY = typeof s.currY === 'number' ? s.currY : s.y2;
+      if (
+        Number.isFinite(prevX) &&
+        Number.isFinite(prevY) &&
+        Number.isFinite(currX) &&
+        Number.isFinite(currY)
+      ) {
+        cleanStrokes.push({
+          prevX,
+          prevY,
+          currX,
+          currY,
+          color: typeof s.color === 'string' ? s.color.slice(0, 32) : '#FFFFFF',
+          size: Number.isFinite(s.size) ? Math.max(1, Math.min(48, s.size)) : 4,
+          isEraser: Boolean(s.isEraser),
+        });
+      }
+    }
+    if (cleanStrokes.length === 0) return;
 
     if (!squadWhiteboards.has(squadId)) {
       squadWhiteboards.set(squadId, []);
     }
     const roomStrokes = squadWhiteboards.get(squadId);
-    for (const s of incoming) {
-      if (s && typeof s.x1 === 'number' && typeof s.y1 === 'number') {
-        roomStrokes.push(s);
-      }
-    }
+    roomStrokes.push(...cleanStrokes);
     if (roomStrokes.length > 4000) {
       roomStrokes.splice(0, roomStrokes.length - 3000);
     }
 
-    if (Array.isArray(batchStrokes)) {
-      socket.to(squadId).emit('whiteboard_draw_batch', incoming);
-    } else if (stroke) {
-      socket.to(squadId).emit('whiteboard_draw', stroke);
-    }
+    socket.to(squadId).emit('whiteboard_draw', cleanStrokes.length === 1 ? cleanStrokes[0] : cleanStrokes);
   });
 
   // Collaborative Real-Time Whiteboard: Clear canvas (authenticated users only)

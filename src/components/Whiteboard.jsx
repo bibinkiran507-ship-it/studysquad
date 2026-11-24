@@ -188,6 +188,7 @@ export default function Whiteboard({ socket, squadId }) {
     };
 
     socket.on('whiteboard_draw', handleRemoteDraw);
+    socket.on('whiteboard_draw_batch', handleRemoteDraw);
     socket.on('whiteboard_init', handleRemoteInit);
     socket.on('whiteboard_clear', handleRemoteClear);
 
@@ -196,6 +197,7 @@ export default function Whiteboard({ socket, squadId }) {
 
     return () => {
       socket.off('whiteboard_draw', handleRemoteDraw);
+      socket.off('whiteboard_draw_batch', handleRemoteDraw);
       socket.off('whiteboard_init', handleRemoteInit);
       socket.off('whiteboard_clear', handleRemoteClear);
     };

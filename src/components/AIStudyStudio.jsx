@@ -1296,7 +1296,10 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           squadName: squad?.name || 'StudySquad',
           sharedNotes: squad?.sharedNotes || '',
         },
-        history: newMessages,
+        history: newMessages.slice(-10).map((m) => ({
+          sender: m.sender,
+          text: typeof m.text === 'string' ? m.text.slice(0, 1200) : '',
+        })),
         mode: 'chat',
       };
 
