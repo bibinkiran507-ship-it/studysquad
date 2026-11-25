@@ -3,7 +3,9 @@ import path from 'path';
 import zlib from 'zlib';
 
 const MAX_EXTRACTED_CHARS = 60_000;
-const MAX_XML_ENTRY_UNCOMPRESSED = 15 * 1024 * 1024; // 15 MB zip-bomb guard
+const MAX_XML_ENTRY_UNCOMPRESSED = 15 * 1024 * 1024; // 15 MB per-entry zip-bomb guard
+const MAX_TOTAL_UNCOMPRESSED = 25 * 1024 * 1024; // 25 MB cumulative zip-bomb guard
+const MAX_MATCHED_ENTRIES = 200; // Max 200 slides/entries per archive
 
 const decodeXmlEntities = (str) =>
   str
@@ -54,8 +56,10 @@ function readZipXmlEntries(zipBuf, entryMatcher) {
 
   const results = [];
   let pos = cdOffset;
+  let cumulativeBytes = 0;
 
   for (let idx = 0; idx < totalEntries && pos + 46 <= zipBuf.length; idx++) {
+    if (results.length >= MAX_MATCHED_ENTRIES || cumulativeBytes >= MAX_TOTAL_UNCOMPRESSED) break;
     if (zipBuf.readUInt32LE(pos) !== 0x02014b50) break;
 
     const method = zipBuf.readUInt16LE(pos + 10);
@@ -90,7 +94,10 @@ function readZipXmlEntries(zipBuf, entryMatcher) {
           .toString('utf8');
       }
       if (xml) {
-        results.push({ name: entryName, xml });
+        cumulativeBytes += Buffer.byteLength(xml, 'utf8');
+        if (cumulativeBytes <= MAX_TOTAL_UNCOMPRESSED) {
+          results.push({ name: entryName, xml });
+        }
       }
     } catch {
       // Skip malformed individual XML entry gracefully

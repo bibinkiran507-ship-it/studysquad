@@ -8,6 +8,7 @@ const PRO_UNLIMITED_NUMERIC = 999999;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // In-memory daily counter: key = `${userId_or_ip}:${YYYY-MM-DD}` -> count
+const MAX_DAILY_MAP_SIZE = 10000;
 const dailyUsageMap = new Map();
 
 // Helper to get today's date key in IST (YYYY-MM-DD) so Indian students get a midnight reset
@@ -98,8 +99,12 @@ export const enforceAiLimit = (req, res, next) => {
     });
   }
 
-  // Reserve 1 credit for this request
+  // Reserve 1 credit for this request (with bounded map size to prevent spoofed-IP OOM)
   const nextUsed = currentUsed + 1;
+  if (!dailyUsageMap.has(todayKey) && dailyUsageMap.size >= MAX_DAILY_MAP_SIZE) {
+    const oldestKey = dailyUsageMap.keys().next().value;
+    if (oldestKey) dailyUsageMap.delete(oldestKey);
+  }
   dailyUsageMap.set(todayKey, nextUsed);
   res.setHeader('X-Daily-Limit', DAILY_FREE_LIMIT);
   res.setHeader('X-Daily-Used', nextUsed);

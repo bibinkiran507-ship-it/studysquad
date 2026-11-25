@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, memo } from 'react';
 import { Volume2, VolumeX, Play, Pause, Music, CloudRain, Wind, Brain, Sparkles } from 'lucide-react';
 
 // Preset sound modes
@@ -43,7 +43,7 @@ const SOUND_MODES = [
   },
 ];
 
-export default function LoFiFocusPlayer({ className = '' }) {
+export default memo(function LoFiFocusPlayer({ className = '' }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedMode, setSelectedMode] = useState(SOUND_MODES[0].id);
   const [volume, setVolume] = useState(0.5);
@@ -56,6 +56,8 @@ export default function LoFiFocusPlayer({ className = '' }) {
   const audioCtxRef = useRef(null);
   const gainNodeRef = useRef(null);
   const synthNodesRef = useRef([]);
+  const isPlayingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   // Initialize or resume AudioContext
   const getAudioContext = () => {
@@ -172,6 +174,7 @@ export default function LoFiFocusPlayer({ className = '' }) {
       audioElRef.current.volume = isMuted ? 0 : volume;
 
       const fallbackToLocalSynth = () => {
+        if (!isMountedRef.current || !isPlayingRef.current) return;
         try {
           audioElRef.current?.pause();
         } catch {
@@ -183,6 +186,7 @@ export default function LoFiFocusPlayer({ className = '' }) {
 
       audioElRef.current.onerror = fallbackToLocalSynth;
       audioElRef.current.play().catch((err) => {
+        if (!isMountedRef.current || !isPlayingRef.current) return;
         console.warn('External stream unavailable, activating local ambient synth:', err?.message);
         fallbackToLocalSynth();
       });
@@ -203,9 +207,11 @@ export default function LoFiFocusPlayer({ className = '' }) {
 
   // Stop everything
   const stopAllSound = () => {
+    isPlayingRef.current = false;
     if (audioElRef.current) {
       audioElRef.current.onerror = null;
       audioElRef.current.pause();
+      audioElRef.current.removeAttribute('src');
     }
     stopSynthesizers();
     setUsingSynthFallback(false);
@@ -217,6 +223,7 @@ export default function LoFiFocusPlayer({ className = '' }) {
       stopAllSound();
       setIsPlaying(false);
     } else {
+      isPlayingRef.current = true;
       setIsPlaying(true);
       const mode = SOUND_MODES.find((m) => m.id === selectedMode) || SOUND_MODES[0];
       playMode(mode);
@@ -259,7 +266,9 @@ export default function LoFiFocusPlayer({ className = '' }) {
 
   // Cleanup on unmount
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       stopAllSound();
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         try {
@@ -409,4 +418,4 @@ export default function LoFiFocusPlayer({ className = '' }) {
       )}
     </div>
   );
-}
+});

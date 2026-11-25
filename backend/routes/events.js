@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma, { withRetry } from '../lib/prisma.js';
-import { generateWithGemini } from './ai.js';
+import { generateWithGemini, formatPoweredBy } from './ai.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import { enforceAiLimit } from '../middleware/freemiumLimiter.js';
 
@@ -34,7 +34,13 @@ router.get('/', optionalAuth, async (req, res) => {
     if (type && typeof type === 'string') where.type = type;
 
     if (userId && typeof userId === 'string') {
-      where.userId = userId;
+      if (req.user?.id === userId) {
+        where.userId = userId;
+      } else {
+        // Never expose another student's private personal events (squadId === null)
+        where.userId = userId;
+        where.squadId = { not: null };
+      }
     } else if (!squadId) {
       // Return public squad events plus the logged-in student's personal milestones
       if (req.user?.id) {
@@ -360,9 +366,10 @@ Format cleanly with Markdown, emojis, and clear bullet points.`;
     if (geminiRes && geminiRes.text) {
       return res.json({
         plan: geminiRes.text,
-        poweredBy: `Google Gemini (${geminiRes.modelName})`,
+        poweredBy: formatPoweredBy(geminiRes),
       });
     }
+    res.locals.aiUsedFallback = true;
 
     const fallbackPlan =
       `📅 **${safeDays}-Day Exam Countdown Plan for ${examTitle || subject || 'Upcoming Exam'}**\n\n` +

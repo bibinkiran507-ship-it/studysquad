@@ -57,7 +57,7 @@ const RichMarkdown = memo(function RichMarkdown({ content, theme = 'cyan', class
     const palette = ACADEMIC_THEME_STYLES[theme] || ACADEMIC_THEME_STYLES.cyan;
     const text = String(content);
 
-    const blockRegex = /```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```|\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\]/g;
+    const blockRegex = /```([a-zA-Z0-9_+#.-]*)\r?\n([\s\S]*?)```|\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\]/g;
     const segments = [];
     let lastIdx = 0;
     let match;

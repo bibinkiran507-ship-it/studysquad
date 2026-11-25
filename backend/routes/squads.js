@@ -87,9 +87,8 @@ const isSafeOptionalHttpUrl = (val) => {
 
 const isSafeResourceUrl = (val) => {
   if (!val || typeof val !== 'string' || !val.trim()) return true;
-  const trimmed = val.trim();
-  if (trimmed.startsWith('/uploads/')) return true;
-  return isSafeOptionalHttpUrl(trimmed);
+  // External resource links must be http(s):// — local /uploads/ files are created exclusively via POST /:id/upload
+  return isSafeOptionalHttpUrl(val.trim());
 };
 
 const RESOURCE_PUBLIC_SELECT = {
@@ -418,6 +417,10 @@ router.post('/:id/join', requireAuth, async (req, res) => {
       });
     }
 
+    if (squad.ownerId !== req.user.id && squad.members.length >= (squad.maxMembers || 50)) {
+      return res.status(400).json({ error: 'This study squad is currently full.' });
+    }
+
     let newlyAdded = false;
     try {
       await withRetry(() =>
@@ -574,7 +577,24 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only the squad owner can delete this squad.' });
     }
 
+    const squadResources = await withRetry(() =>
+      prisma.resource.findMany({
+        where: { squadId: id },
+        select: { url: true },
+      })
+    );
+
     await withRetry(() => prisma.squad.delete({ where: { id } }));
+
+    for (const r of squadResources) {
+      if (r.url && r.url.startsWith('/uploads/')) {
+        const candidatePath = path.resolve(uploadsDir, path.basename(r.url));
+        if (candidatePath.startsWith(uploadsDir)) {
+          fs.promises.unlink(candidatePath).catch(() => {});
+        }
+      }
+    }
+
     return res.json({ message: 'Squad deleted successfully.' });
   } catch (error) {
     console.error('Delete squad error:', error);
@@ -818,6 +838,9 @@ router.post('/:id/upload', requireAuth, handleFileUpload, async (req, res) => {
       },
     });
   } catch (err) {
+    if (req.file?.path) {
+      fs.promises.unlink(req.file.path).catch(() => {});
+    }
     console.error('Upload resource error:', err);
     return res.status(500).json({ error: 'Failed to upload lecture file.' });
   }

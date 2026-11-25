@@ -61,6 +61,7 @@ export default function LoginPage() {
         try {
           const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${tok.access_token}` },
+            signal: AbortSignal.timeout(6000),
           });
           if (res.ok) {
             const profile = await res.json();

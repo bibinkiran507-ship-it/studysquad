@@ -293,9 +293,10 @@ export const generateWithGemini = async (contents, options = {}) => {
     ...rotatedFast.filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now),
   ];
 
-  // Pass 1: Google Gemini Fast Pair (8s cap when Groq instant backup is armed, 16s when Gemini-only)
-  const pass1Timeout = hasGroqKey ? 8000 : null;
+  // Pass 1: Google Gemini Fast Pair (6.5s cap when Groq instant backup is armed, 16s when Gemini-only)
+  const pass1Timeout = hasGroqKey ? 6500 : null;
   for (const entry of fastOrdered) {
+    const attemptStart = Date.now();
     try {
       return await invokeModelOnce(
         genAI,
@@ -306,6 +307,10 @@ export const generateWithGemini = async (contents, options = {}) => {
       );
     } catch (err) {
       if (err?.isBadRequest) return null;
+      // If Gemini stalled for >=6s and Groq backup is ready, jump straight to Groq instead of stalling another 6.5s
+      if (hasGroqKey && Date.now() - attemptStart >= 6000) {
+        break;
+      }
     }
   }
 
@@ -423,8 +428,9 @@ No markdown fences, no backticks, only raw JSON.
             .map((m) => {
               const squad = squads.find((s) => s.id === m.squadId);
               if (!squad) return null;
+              const { sharedNotes: _sn, ...publicSquad } = squad;
               return {
-                ...squad,
+                ...publicSquad,
                 memberCount: squad.members.length,
                 members: squad.members.map((mem) => mem.user),
                 aiMatchScore: m.matchScore,
@@ -484,8 +490,9 @@ No markdown fences, no backticks, only raw JSON.
           ? reasons.join('. ') + '.'
           : `Strong study track for ${squad.subject} with balanced peer momentum.`;
 
+      const { sharedNotes: _sn, ...publicSquad } = squad;
       return {
-        ...squad,
+        ...publicSquad,
         memberCount: squad.members.length,
         members: squad.members.map((mem) => mem.user),
         aiMatchScore: finalScore,
@@ -1326,10 +1333,10 @@ router.post('/chat-doc', requireAuth, enforceAiLimit, async (req, res) => {
       resourceRecord?.title ||
       'Study Document';
 
-    // Resolve local file path strictly within uploads directory (prevent path traversal)
+    // Resolve local file path strictly via an authorized squad resourceRecord (blocks unlinked /uploads/ probing)
     let localFilePath = null;
-    if (effectiveFileUrl && effectiveFileUrl.startsWith('/uploads/')) {
-      const fileNameOnly = path.basename(effectiveFileUrl);
+    if (resourceRecord?.url && resourceRecord.url.startsWith('/uploads/')) {
+      const fileNameOnly = path.basename(resourceRecord.url);
       const uploadsDir = process.env.UPLOADS_DIR
         ? path.resolve(process.env.UPLOADS_DIR)
         : path.resolve(__dirname, '..', 'uploads');
@@ -1363,7 +1370,7 @@ Instructions:
           let geminiResult = null;
 
           if (ext === '.pdf' || ['.png', '.jpg', '.jpeg'].includes(ext)) {
-            const fileBuffer = fs.readFileSync(localFilePath);
+            const fileBuffer = await fs.promises.readFile(localFilePath);
             const mimeType =
               ext === '.pdf'
                 ? 'application/pdf'

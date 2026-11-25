@@ -195,26 +195,33 @@ function AppInner() {
   }, [squads]);
 
   // When user clicks "Find Squads" in hero banner: AI Matchmaker
+  const isMatchingRef = useRef(false);
   const handleFindSquads = async () => {
-    if (selectedOptions.length > 0) {
-      try {
-        const res = await aiAPI.matchSquads(selectedOptions, '');
-        if (res.data.matches && res.data.matches.length > 0) {
-          const matchedIds = new Set(res.data.matches.map((m) => m.id));
-          const otherSquads = squads.filter((s) => !matchedIds.has(s.id));
-          setSquads([...res.data.matches, ...otherSquads]);
-          setAiPoweredBy(res.data.poweredBy || 'Gemini AI');
-          setSelectedFilter('All');
+    if (isMatchingRef.current) return;
+    isMatchingRef.current = true;
+    try {
+      if (selectedOptions.length > 0) {
+        try {
+          const res = await aiAPI.matchSquads(selectedOptions, '');
+          if (res.data.matches && res.data.matches.length > 0) {
+            const matchedIds = new Set(res.data.matches.map((m) => m.id));
+            const otherSquads = squads.filter((s) => !matchedIds.has(s.id));
+            setSquads([...res.data.matches, ...otherSquads]);
+            setAiPoweredBy(res.data.poweredBy || 'Gemini AI');
+            setSelectedFilter('All');
+          }
+        } catch (err) {
+          console.warn('AI matching error, falling back to filter:', err.message);
+          setSelectedFilter(selectedOptions[0]);
         }
-      } catch (err) {
-        console.warn('AI matching error, falling back to filter:', err.message);
-        setSelectedFilter(selectedOptions[0]);
       }
-    }
 
-    const element = document.getElementById('squads-section');
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
+      const element = document.getElementById('squads-section');
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth' });
+      }
+    } finally {
+      isMatchingRef.current = false;
     }
   };
 
@@ -314,12 +321,16 @@ function AppInner() {
     );
 
     if (activeSquadRoom && activeSquadRoom.id === squadId) {
-      setActiveSquadRoom((prev) => ({
-        ...prev,
-        tasks: (prev.tasks || []).map((t) =>
-          t.id === taskId ? { ...t, completed: newCompleted } : t
-        ),
-      }));
+      setActiveSquadRoom((prev) =>
+        prev
+          ? {
+              ...prev,
+              tasks: (prev.tasks || []).map((t) =>
+                t.id === taskId ? { ...t, completed: newCompleted } : t
+              ),
+            }
+          : prev
+      );
     }
 
     try {
@@ -353,10 +364,14 @@ function AppInner() {
       );
 
       if (activeSquadRoom && activeSquadRoom.id === squadId) {
-        setActiveSquadRoom((prev) => ({
-          ...prev,
-          tasks: [...(prev.tasks || []), newTask],
-        }));
+        setActiveSquadRoom((prev) =>
+          prev
+            ? {
+                ...prev,
+                tasks: [...(prev.tasks || []), newTask],
+              }
+            : prev
+        );
       }
     } catch (err) {
       console.warn('API task creation failed, using optimistic task:', err.message);
@@ -563,6 +578,7 @@ function AppInner() {
       {activeSquadRoom && (
         <Suspense fallback={null}>
           <SquadRoomModal
+            key={activeSquadRoom.id}
             squad={activeSquadRoom}
             isOpen={!!activeSquadRoom}
             onClose={handleCloseSquadRoom}

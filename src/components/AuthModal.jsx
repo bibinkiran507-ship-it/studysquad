@@ -53,6 +53,7 @@ export default function AuthModal() {
         try {
           const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+            signal: AbortSignal.timeout(6000),
           });
           if (res.ok) {
             const profile = await res.json();
