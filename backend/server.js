@@ -463,6 +463,10 @@ io.on('connection', (socket) => {
       }
 
       const publicLeaver = toPublicUser(socket.authUser || user, 'guest-' + socket.id);
+      socket.to(squadId).emit('whiteboard_live_text', {
+        socketId: socket.id,
+        draft: null,
+      });
       socket.to(squadId).emit('user_left', {
         user: publicLeaver,
         message: `${publicLeaver.name || 'A teammate'} left the room.`,
@@ -596,6 +600,35 @@ io.on('connection', (socket) => {
     }
 
     socket.to(squadId).emit('whiteboard_draw', cleanStrokes.length === 1 ? cleanStrokes[0] : cleanStrokes);
+  });
+
+  // Collaborative Real-Time Whiteboard: Live character-by-character typing preview
+  socket.on('whiteboard_live_text', (raw) => {
+    const { squadId, draft } = asObj(raw);
+    if (!socket.authUser || !squadId || typeof squadId !== 'string') return;
+    if (!draft || typeof draft !== 'object') {
+      socket.to(squadId).emit('whiteboard_live_text', {
+        socketId: socket.id,
+        draft: null,
+      });
+      return;
+    }
+    const x = Number(draft.x);
+    const y = Number(draft.y);
+    const text = typeof draft.text === 'string' ? draft.text.replace(/\r/g, '').slice(0, 500) : '';
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+    socket.to(squadId).emit('whiteboard_live_text', {
+      socketId: socket.id,
+      userName: socket.authUser.name || 'Squad Mate',
+      draft: {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+        text,
+        color: typeof draft.color === 'string' ? draft.color.slice(0, 32) : '#FFFFFF',
+        fontSize: Number.isFinite(draft.fontSize) ? Math.max(12, Math.min(48, draft.fontSize)) : 18,
+      },
+    });
   });
 
   // Collaborative Real-Time Whiteboard: Clear canvas (authenticated users only)
@@ -781,6 +814,10 @@ io.on('connection', (socket) => {
         }
       }
       socketPresenceMap.delete(socket.id);
+      socket.to(squadId).emit('whiteboard_live_text', {
+        socketId: socket.id,
+        draft: null,
+      });
       socket.to(squadId).emit('user_left', {
         user,
         message: `${user?.name || 'A teammate'} disconnected.`,

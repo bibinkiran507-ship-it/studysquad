@@ -43,8 +43,28 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
   const [strokeSize, setStrokeSize] = useState(4);
   const [confirmClear, setConfirmClear] = useState(false);
   const [textDraft, setTextDraft] = useState(null); // { x, y, text }
+  const [remoteDrafts, setRemoteDrafts] = useState({}); // socketId -> { userName, x, y, text, color, fontSize }
 
   const activeFontSize = STROKE_SIZES.find((sz) => sz.value === strokeSize)?.fontSize || 18;
+
+  // Broadcast live typing preview to everyone in the squad character-by-character
+  const emitLiveTextDraft = useCallback(
+    (draftPayload) => {
+      if (!socket || !squadId) return;
+      socket.emit('whiteboard_live_text', {
+        squadId,
+        draft: draftPayload,
+      });
+    },
+    [socket, squadId]
+  );
+
+  // Sync live typing color/size changes and clear preview on unmount
+  useEffect(() => {
+    return () => {
+      emitLiveTextDraft(null);
+    };
+  }, [emitLiveTextDraft]);
 
   // Auto-reset 2-step clear confirmation after 3 seconds
   useEffect(() => {
@@ -207,6 +227,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
 
     const handleRemoteClear = () => {
       strokesHistoryRef.current = [];
+      setRemoteDrafts({});
       const canvas = canvasRef.current;
       if (!canvas) return;
       const { width, height } = rectRef.current;
@@ -214,10 +235,34 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       ctx.clearRect(0, 0, width || canvas.width, height || canvas.height);
     };
 
+    const handleRemoteLiveText = ({ socketId: peerId, userName, draft }) => {
+      if (!peerId) return;
+      setRemoteDrafts((prev) => {
+        if (!draft) {
+          if (!prev[peerId]) return prev;
+          const next = { ...prev };
+          delete next[peerId];
+          return next;
+        }
+        return {
+          ...prev,
+          [peerId]: {
+            userName: userName || 'Squad Mate',
+            x: draft.x,
+            y: draft.y,
+            text: draft.text || '',
+            color: draft.color || '#FFFFFF',
+            fontSize: draft.fontSize || 18,
+          },
+        };
+      });
+    };
+
     socket.on('whiteboard_draw', handleRemoteDraw);
     socket.on('whiteboard_draw_batch', handleRemoteDraw);
     socket.on('whiteboard_init', handleRemoteInit);
     socket.on('whiteboard_clear', handleRemoteClear);
+    socket.on('whiteboard_live_text', handleRemoteLiveText);
 
     // Fetch existing strokes even if Whiteboard tab was opened after join_room
     socket.emit('whiteboard_request_init', { squadId });
@@ -227,6 +272,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       socket.off('whiteboard_draw_batch', handleRemoteDraw);
       socket.off('whiteboard_init', handleRemoteInit);
       socket.off('whiteboard_clear', handleRemoteClear);
+      socket.off('whiteboard_live_text', handleRemoteLiveText);
     };
   }, [socket, squadId, drawSegment, redrawAllStrokes]);
 
@@ -306,11 +352,12 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     hasMovedRef.current = false;
   };
 
-  // Commit inline text box onto the shared canvas
+  // Commit inline text box permanently onto the shared canvas
   const commitTextDraft = (draftToCommit = textDraft) => {
     if (!draftToCommit) return;
     const cleanText = String(draftToCommit.text || '').replace(/\r/g, '').trimEnd();
     setTextDraft(null);
+    emitLiveTextDraft(null);
     if (!cleanText.trim()) return;
 
     emitLocalStroke({
@@ -321,6 +368,11 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       color,
       fontSize: activeFontSize,
     });
+  };
+
+  const cancelTextDraft = () => {
+    setTextDraft(null);
+    emitLiveTextDraft(null);
   };
 
   // Place inline text cursor at clicked/tapped position
@@ -337,7 +389,9 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
 
     const x = Math.max(0.01, Math.min(0.86, (clientX - rect.left) / rect.width));
     const y = Math.max(0.02, Math.min(0.88, (clientY - rect.top) / rect.height));
-    setTextDraft({ x, y, text: '' });
+    const freshDraft = { x, y, text: '' };
+    setTextDraft(freshDraft);
+    emitLiveTextDraft({ x, y, text: '', color, fontSize: activeFontSize });
     requestAnimationFrame(() => {
       textInputRef.current?.focus();
     });
@@ -348,6 +402,33 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       commitTextDraft(textDraft);
     }
     setTool(nextTool);
+  };
+
+  const handleSelectColor = (nextColor) => {
+    setColor(nextColor);
+    if (textDraft) {
+      emitLiveTextDraft({
+        x: textDraft.x,
+        y: textDraft.y,
+        text: textDraft.text,
+        color: nextColor,
+        fontSize: activeFontSize,
+      });
+    }
+  };
+
+  const handleSelectStrokeSize = (nextSize) => {
+    setStrokeSize(nextSize);
+    if (textDraft) {
+      const nextFont = STROKE_SIZES.find((sz) => sz.value === nextSize)?.fontSize || 18;
+      emitLiveTextDraft({
+        x: textDraft.x,
+        y: textDraft.y,
+        text: textDraft.text,
+        color,
+        fontSize: nextFont,
+      });
+    }
   };
 
   // Mouse Handlers
@@ -412,6 +493,8 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     }
     setConfirmClear(false);
     setTextDraft(null);
+    setRemoteDrafts({});
+    emitLiveTextDraft(null);
     strokesHistoryRef.current = [];
     const canvas = canvasRef.current;
     if (canvas) {
@@ -506,7 +589,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
               <button
                 key={c.value}
                 type="button"
-                onClick={() => setColor(c.value)}
+                onClick={() => handleSelectColor(c.value)}
                 style={{ backgroundColor: c.value }}
                 className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${
                   color === c.value
@@ -525,7 +608,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
             <button
               key={sz.value}
               type="button"
-              onClick={() => setStrokeSize(sz.value)}
+              onClick={() => handleSelectStrokeSize(sz.value)}
               className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
                 strokeSize === sz.value
                   ? 'bg-white/20 text-white font-bold'
@@ -589,7 +672,36 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           className="absolute inset-0 w-full h-full block"
         />
 
-        {/* Inline Floating Text Editor when Type tool is active */}
+        {/* Live Character-by-Character Remote Teammate Typing Overlays */}
+        {Object.entries(remoteDrafts).map(([peerId, rd]) => (
+          <div
+            key={peerId}
+            style={{
+              left: `${Math.max(0, Math.min(1, Number(rd.x) || 0)) * 100}%`,
+              top: `${Math.max(0, Math.min(1, Number(rd.y) || 0)) * 100}%`,
+              maxWidth: `calc(100% - ${Math.max(0, Math.min(1, Number(rd.x) || 0)) * 100}% - 12px)`,
+            }}
+            className="absolute z-10 pointer-events-none"
+          >
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 mb-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[10px] font-bold text-cyan-200 backdrop-blur-md shadow">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+              <span>{rd.userName} is typing…</span>
+            </div>
+            <div
+              style={{
+                color: rd.color || '#FFFFFF',
+                fontSize: `${Math.max(12, Math.min(48, Number(rd.fontSize) || 18))}px`,
+                lineHeight: 1.32,
+              }}
+              className="font-semibold whitespace-pre-wrap break-words px-2 py-1 rounded-lg bg-black/45 border border-dashed border-cyan-400/50 backdrop-blur-xs shadow-lg"
+            >
+              {rd.text || ' '}
+              <span className="inline-block w-0.5 h-[1em] bg-cyan-400 align-middle ml-0.5 animate-pulse" />
+            </div>
+          </div>
+        ))}
+
+        {/* Inline Floating Text Editor when Type tool is active (streams live as you type!) */}
         {textDraft && (
           <div
             onMouseDown={(e) => e.stopPropagation()}
@@ -605,9 +717,17 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
               ref={textInputRef}
               rows={2}
               value={textDraft.text}
-              onChange={(e) =>
-                setTextDraft((prev) => (prev ? { ...prev, text: e.target.value } : null))
-              }
+              onChange={(e) => {
+                const nextText = e.target.value.slice(0, 500);
+                setTextDraft((prev) => (prev ? { ...prev, text: nextText } : null));
+                emitLiveTextDraft({
+                  x: textDraft.x,
+                  y: textDraft.y,
+                  text: nextText,
+                  color,
+                  fontSize: activeFontSize,
+                });
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -616,16 +736,16 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
                 } else if (e.key === 'Escape') {
                   e.preventDefault();
                   e.stopPropagation();
-                  setTextDraft(null);
+                  cancelTextDraft();
                 }
               }}
-              placeholder="Type text, formula, or code…"
+              placeholder="Start typing — everyone sees it LIVE…"
               style={{
                 color,
                 fontSize: `${activeFontSize}px`,
                 lineHeight: 1.32,
               }}
-              className="w-full min-w-[180px] sm:min-w-[240px] px-2.5 py-1.5 rounded-xl bg-black/80 backdrop-blur-md border border-cyan-400/70 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 font-semibold placeholder-neutral-500 resize shadow-2xl select-text"
+              className="w-full min-w-[180px] sm:min-w-[260px] px-2.5 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-cyan-400/70 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 font-semibold placeholder-neutral-500 resize shadow-2xl select-text"
             />
             <div className="flex items-center gap-1.5">
               <button
@@ -634,18 +754,18 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
                 className="px-2.5 py-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black text-[11px] font-extrabold inline-flex items-center gap-1 shadow cursor-pointer"
               >
                 <Check className="w-3 h-3" />
-                <span>Place (Enter)</span>
+                <span>Done (Enter)</span>
               </button>
               <button
                 type="button"
-                onClick={() => setTextDraft(null)}
+                onClick={cancelTextDraft}
                 className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 text-[11px] font-semibold inline-flex items-center gap-1 border border-white/10 cursor-pointer"
               >
                 <X className="w-3 h-3" />
                 <span>Cancel</span>
               </button>
-              <span className="text-[10px] text-neutral-400 hidden sm:inline">
-                Shift+Enter for new line
+              <span className="text-[10px] text-cyan-300/90 font-semibold hidden sm:inline">
+                Live to everyone as you type • Shift+Enter = new line
               </span>
             </div>
           </div>
@@ -659,8 +779,8 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           </span>
           <span>
             {tool === 'text'
-              ? 'Type Mode • Click anywhere on the board to type (Enter to place, Shift+Enter for new line)'
-              : 'Live Collaborative Board • Everyone in squad sees your drawings & text'}
+              ? 'Live Type Mode • Everyone sees your letters LIVE as you type! Press Enter when done'
+              : 'Live Collaborative Board • Everyone in squad sees your drawings & live typing'}
           </span>
         </div>
       </div>

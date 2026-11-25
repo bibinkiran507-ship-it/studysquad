@@ -369,7 +369,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     };
   }, []);
 
-  // Notify call participants whenever a teammate draws on the shared Whiteboard
+  // Notify call participants whenever a teammate draws or types live on the shared Whiteboard
   useEffect(() => {
     if (!socket) return undefined;
     const handleRemoteBoardActivity = () => {
@@ -377,11 +377,18 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
         setRemoteDrawingAlert(true);
       }
     };
+    const handleRemoteLiveTextAlert = (payload) => {
+      if (payload?.draft && !showWhiteboardRef.current) {
+        setRemoteDrawingAlert(true);
+      }
+    };
     socket.on('whiteboard_draw', handleRemoteBoardActivity);
     socket.on('whiteboard_draw_batch', handleRemoteBoardActivity);
+    socket.on('whiteboard_live_text', handleRemoteLiveTextAlert);
     return () => {
       socket.off('whiteboard_draw', handleRemoteBoardActivity);
       socket.off('whiteboard_draw_batch', handleRemoteBoardActivity);
+      socket.off('whiteboard_live_text', handleRemoteLiveTextAlert);
     };
   }, [socket]);
 
