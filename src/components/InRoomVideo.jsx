@@ -1228,22 +1228,24 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={handleToggleWhiteboard}
-            className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1.5 border transition-all cursor-pointer text-xs ${
-              showWhiteboard
-                ? 'bg-emerald-500 text-black border-emerald-400 shadow-sm'
-                : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
-            }`}
-            title="Open live collaborative whiteboard inside this call"
-          >
-            <PenTool className="w-3 h-3" />
-            <span>{showWhiteboard ? 'Hide Board' : 'Whiteboard'}</span>
-            {remoteDrawingAlert && !showWhiteboard && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            )}
-          </button>
+          {!inCall && (
+            <button
+              type="button"
+              onClick={handleToggleWhiteboard}
+              className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1.5 border transition-all cursor-pointer text-xs ${
+                showWhiteboard
+                  ? 'bg-emerald-500 text-black border-emerald-400 shadow-sm'
+                  : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
+              }`}
+              title="Open live collaborative whiteboard inside this room"
+            >
+              <PenTool className="w-3 h-3" />
+              <span>{showWhiteboard ? 'Hide Board' : 'Whiteboard'}</span>
+              {remoteDrawingAlert && !showWhiteboard && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </button>
+          )}
 
           {user && (
             <button
@@ -1272,19 +1274,21 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             <span>{copied ? 'Copied!' : 'Invite'}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleToggleFullscreen}
-            className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1 border transition-all cursor-pointer ${
-              isFullscreen
-                ? 'bg-amber-400 text-black border-amber-300'
-                : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
-            }`}
-            title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Enter Fullscreen'}
-          >
-            {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-            <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
-          </button>
+          {!inCall && (
+            <button
+              type="button"
+              onClick={handleToggleFullscreen}
+              className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1 border transition-all cursor-pointer ${
+                isFullscreen
+                  ? 'bg-amber-400 text-black border-amber-300'
+                  : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
+              }`}
+              title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Enter Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+              <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+            </button>
+          )}
 
           <a
             href={effectiveMeetingUrl}
@@ -1579,26 +1583,16 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                   You’re live in the call! Waiting for squad mates to join…
                 </p>
                 <p className="text-[11px] text-neutral-400 max-w-xs">
-                  Share the invite link so classmates can hop in, or open the built-in Whiteboard to draw together!
+                  Share the invite link so classmates can hop into this call with 1 click.
                 </p>
-                <div className="flex items-center justify-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={handleCopyLink}
-                    className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copied ? 'Invite Link Copied!' : 'Copy Squad Invite Link'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleToggleWhiteboard}
-                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
-                  >
-                    <PenTool className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Open Whiteboard</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? 'Invite Link Copied!' : 'Copy Squad Invite Link'}</span>
+                </button>
                 <a
                   href={jitsiFallbackUrl}
                   target="_blank"
@@ -1678,6 +1672,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             <span className="hidden sm:inline">
               {showWhiteboard ? 'Close Board' : 'Whiteboard'}
             </span>
+            {remoteDrawingAlert && !showWhiteboard && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            )}
           </button>
 
           <button
