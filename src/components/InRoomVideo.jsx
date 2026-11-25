@@ -9,6 +9,7 @@ import {
   PhoneOff,
   PhoneCall,
   Maximize2,
+  Minimize2,
   ExternalLink,
   ShieldCheck,
   Copy,
@@ -19,8 +20,14 @@ import {
   Users,
   Smile,
   Pin,
+  PenTool,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+  X,
 } from 'lucide-react';
 import { squadsAPI } from '../api/client';
+import Whiteboard from './Whiteboard';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -66,6 +73,7 @@ const VideoTile = memo(function VideoTile({
   isScreenSharing = false,
   isHandRaised = false,
   isPinned = false,
+  compact = false,
   onTogglePin,
 }) {
   const videoRef = useRef(null);
@@ -93,13 +101,19 @@ const VideoTile = memo(function VideoTile({
 
   return (
     <div
-      className={`relative rounded-2xl overflow-hidden border bg-neutral-900 flex items-center justify-center group transition-all min-h-0 h-full w-full ${
+      className={`relative rounded-2xl overflow-hidden border bg-neutral-900 flex items-center justify-center group transition-all min-h-0 ${
         isHandRaised
           ? 'border-amber-400 shadow-lg shadow-amber-500/20'
           : isScreenSharing
           ? 'border-emerald-400/60 shadow-lg shadow-emerald-500/15'
           : 'border-white/10'
-      } ${isPinned ? 'col-span-full min-h-[190px]' : 'min-h-[140px]'}`}
+      } ${
+        compact
+          ? 'min-w-[165px] h-28 sm:h-32 lg:min-w-0 lg:w-full lg:h-40 shrink-0'
+          : isPinned
+          ? 'col-span-full h-full w-full min-h-[190px]'
+          : 'h-full w-full min-h-[140px]'
+      }`}
     >
       <video
         ref={videoRef}
@@ -194,7 +208,13 @@ const VideoTile = memo(function VideoTile({
 
 const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthModal }) {
   const [copied, setCopied] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+  const [isPseudoFullscreen, setIsPseudoFullscreen] = useState(false);
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [remoteDrawingAlert, setRemoteDrawingAlert] = useState(false);
+  const [camPermission, setCamPermission] = useState('unknown'); // 'granted' | 'denied' | 'prompt' | 'unknown'
+  const [micPermission, setMicPermission] = useState('unknown');
+  const [mediaToast, setMediaToast] = useState(null); // { message, tone: 'success' | 'warning' | 'error' | 'info' }
   const [meetingUrl, setMeetingUrl] = useState(squad?.meetingUrl || squad?.link || '');
   const [isEditingMeeting, setIsEditingMeeting] = useState(false);
   const [meetingInput, setMeetingInput] = useState(squad?.meetingUrl || squad?.link || '');
@@ -214,6 +234,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
   const [reactions, setReactions] = useState([]);
   const [showReactionsBar, setShowReactionsBar] = useState(false);
 
+  const callContainerRef = useRef(null);
+  const toastTimerRef = useRef(null);
+  const showWhiteboardRef = useRef(false);
   const localStreamRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const screenStreamRef = useRef(null);
@@ -227,9 +250,187 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     isHandRaised: false,
   });
 
+  const isFullscreen = isNativeFullscreen || isPseudoFullscreen;
+
+  const showMediaToast = useCallback((message, tone = 'success', duration = 4500) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setMediaToast({ message, tone });
+    if (duration > 0) {
+      toastTimerRef.current = setTimeout(() => {
+        setMediaToast(null);
+      }, duration);
+    }
+  }, []);
+
+  useEffect(() => {
+    showWhiteboardRef.current = showWhiteboard;
+  }, [showWhiteboard]);
+
   useEffect(() => {
     stateRef.current = { audioMuted, videoMuted, isScreenSharing, isHandRaised };
   }, [audioMuted, videoMuted, isScreenSharing, isHandRaised]);
+
+  // Live Camera & Microphone permission monitoring (notifies users when allowed or blocked)
+  useEffect(() => {
+    let active = true;
+    let camStatusObj = null;
+    let micStatusObj = null;
+
+    const watchPermissions = async () => {
+      if (typeof navigator === 'undefined' || !navigator.permissions?.query) return;
+      try {
+        camStatusObj = await navigator.permissions.query({ name: 'camera' });
+        if (active && camStatusObj) {
+          setCamPermission(camStatusObj.state);
+          camStatusObj.onchange = () => {
+            if (!active) return;
+            const next = camStatusObj.state;
+            setCamPermission(next);
+            if (next === 'granted') {
+              showMediaToast('Camera permission allowed!', 'success');
+            } else if (next === 'denied') {
+              showMediaToast(
+                'Camera permission blocked — Allow camera in your browser address bar to enable video.',
+                'warning',
+                6000
+              );
+            }
+          };
+        }
+      } catch {
+        // Safari/Firefox may not support permissions.query({ name: 'camera' })
+      }
+
+      try {
+        micStatusObj = await navigator.permissions.query({ name: 'microphone' });
+        if (active && micStatusObj) {
+          setMicPermission(micStatusObj.state);
+          micStatusObj.onchange = () => {
+            if (!active) return;
+            const next = micStatusObj.state;
+            setMicPermission(next);
+            if (next === 'granted') {
+              showMediaToast('Microphone permission allowed!', 'success');
+            } else if (next === 'denied') {
+              showMediaToast(
+                'Microphone permission blocked — Allow microphone in your browser address bar to speak.',
+                'warning',
+                6000
+              );
+            }
+          };
+        }
+      } catch {
+        // Unsupported browser permissions API
+      }
+    };
+
+    watchPermissions();
+
+    return () => {
+      active = false;
+      if (camStatusObj) camStatusObj.onchange = null;
+      if (micStatusObj) micStatusObj.onchange = null;
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, [showMediaToast]);
+
+  // Keep native Fullscreen & Escape state in sync
+  useEffect(() => {
+    const syncFullscreen = () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement || null;
+      setIsNativeFullscreen(Boolean(fsEl && fsEl === callContainerRef.current));
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsPseudoFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', syncFullscreen);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  // Notify call participants whenever a teammate draws on the shared Whiteboard
+  useEffect(() => {
+    if (!socket) return undefined;
+    const handleRemoteBoardActivity = () => {
+      if (!showWhiteboardRef.current) {
+        setRemoteDrawingAlert(true);
+      }
+    };
+    socket.on('whiteboard_draw', handleRemoteBoardActivity);
+    socket.on('whiteboard_draw_batch', handleRemoteBoardActivity);
+    return () => {
+      socket.off('whiteboard_draw', handleRemoteBoardActivity);
+      socket.off('whiteboard_draw_batch', handleRemoteBoardActivity);
+    };
+  }, [socket]);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    const el = callContainerRef.current;
+    if (!el) return;
+
+    const currentFs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (currentFs) {
+      try {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      } catch {}
+      setIsNativeFullscreen(false);
+      setIsPseudoFullscreen(false);
+      return;
+    }
+
+    if (isPseudoFullscreen) {
+      setIsPseudoFullscreen(false);
+      return;
+    }
+
+    try {
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+        setIsNativeFullscreen(true);
+        showMediaToast('Fullscreen mode active — Press Esc or Exit Fullscreen anytime.', 'info', 3000);
+        return;
+      }
+      if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+        setIsNativeFullscreen(true);
+        showMediaToast('Fullscreen mode active — Press Esc or Exit Fullscreen anytime.', 'info', 3000);
+        return;
+      }
+    } catch {
+      // Fallback to viewport-fixed fullscreen overlay on mobile/iOS browsers
+    }
+
+    setIsPseudoFullscreen(true);
+    showMediaToast('Fullscreen mode active — Tap Exit Fullscreen or press Esc anytime.', 'info', 3000);
+  }, [isPseudoFullscreen, showMediaToast]);
+
+  const handleToggleWhiteboard = useCallback(() => {
+    setShowWhiteboard((prev) => {
+      const next = !prev;
+      if (next) {
+        setRemoteDrawingAlert(false);
+        showMediaToast('In-Call Whiteboard opened — Everyone in this squad can draw together live!', 'info', 3800);
+      }
+      return next;
+    });
+  }, [showMediaToast]);
 
   useEffect(() => {
     const nextUrl = squad?.meetingUrl || squad?.link || '';
@@ -285,6 +486,14 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
       setIsScreenSharing(false);
       setIsHandRaised(false);
       setPinnedId(null);
+      setIsPseudoFullscreen(false);
+      if (
+        typeof document !== 'undefined' &&
+        (document.fullscreenElement === callContainerRef.current ||
+          document.webkitFullscreenElement === callContainerRef.current)
+      ) {
+        document.exitFullscreen?.().catch?.(() => {});
+      }
 
       for (const peerId of Array.from(pcsRef.current.keys())) {
         closePeer(peerId);
@@ -570,22 +779,50 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
           : false,
       });
-    } catch {
+      setMicPermission('granted');
+      if (withCamera && acquiredStream.getVideoTracks().length > 0) {
+        setCamPermission('granted');
+        showMediaToast('Camera & Microphone allowed — You are live in HD!', 'success', 4500);
+      } else {
+        showMediaToast('Microphone allowed — Joined in Voice Mode (Camera Off).', 'success', 4500);
+      }
+    } catch (firstErr) {
+      const camWasDenied =
+        firstErr?.name === 'NotAllowedError' || firstErr?.name === 'PermissionDeniedError';
+      if (withCamera && camWasDenied) {
+        setCamPermission('denied');
+      }
       // Graceful fallback: try audio-only if laptop has no webcam, or listen-only if mic isn't plugged in
       try {
         acquiredStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true },
           video: false,
         });
+        setMicPermission('granted');
         startVideoMuted = true;
         if (withCamera) {
-          setMediaNotice('Joined in voice mode (camera unavailable or blocked). You can still talk and share screen!');
+          const msg = camWasDenied
+            ? 'Microphone allowed, but Camera was blocked. Click the lock/camera icon in your address bar to allow camera.'
+            : 'Microphone allowed — Joined in voice mode (no webcam detected). You can still talk, draw & share screen!';
+          setMediaNotice(msg);
+          showMediaToast(msg, 'warning', 6000);
+        } else {
+          showMediaToast('Microphone allowed — Joined in Voice Mode.', 'success', 4000);
         }
-      } catch {
+      } catch (audioErr) {
+        const micWasDenied =
+          audioErr?.name === 'NotAllowedError' || audioErr?.name === 'PermissionDeniedError';
+        if (micWasDenied) setMicPermission('denied');
+        if (withCamera) setCamPermission('denied');
         acquiredStream = new MediaStream();
         startAudioMuted = true;
         startVideoMuted = true;
-        setMediaNotice('Joined in watch/listen mode (mic & camera permissions not granted).');
+        const msg =
+          micWasDenied || camWasDenied
+            ? 'Camera & Microphone permissions were blocked — Joined in watch/listen mode. Allow them in your browser address bar anytime.'
+            : 'No microphone or camera detected — Joined in watch/listen mode.';
+        setMediaNotice(msg);
+        showMediaToast(msg, 'error', 6500);
       }
     }
 
@@ -653,12 +890,19 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
               signal: { type: 'offer', sdp: pc.localDescription },
             });
           }
+          setMicPermission('granted');
           setAudioMuted(false);
           emitLocalPeerState({ audioMuted: false });
           setMediaNotice('');
+          showMediaToast('Microphone allowed & unmuted!', 'success', 3500);
         }
-      } catch {
-        setMediaNotice('Please allow microphone access in your browser bar to unmute.');
+      } catch (err) {
+        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+          setMicPermission('denied');
+        }
+        const msg = 'Microphone permission blocked — Click the lock/mic icon in your browser bar to allow access.';
+        setMediaNotice(msg);
+        showMediaToast(msg, 'error', 5500);
       }
       return;
     }
@@ -669,6 +913,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     });
     setAudioMuted(nextMuted);
     emitLocalPeerState({ audioMuted: nextMuted });
+    showMediaToast(nextMuted ? 'Microphone muted' : 'Microphone on (allowed)', nextMuted ? 'info' : 'success', 2200);
   };
 
   const handleToggleCamera = async () => {
@@ -690,12 +935,19 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           cameraTrackRef.current = newCamTrack;
           await replaceOutgoingVideoTrack(newCamTrack);
           setLocalStream(new MediaStream(stream.getTracks()));
+          setCamPermission('granted');
           setVideoMuted(false);
           emitLocalPeerState({ videoMuted: false });
           setMediaNotice('');
+          showMediaToast('Camera allowed & turned on!', 'success', 3500);
         }
-      } catch {
-        setMediaNotice('Camera permission denied or no webcam found on this device.');
+      } catch (err) {
+        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+          setCamPermission('denied');
+        }
+        const msg = 'Camera permission blocked or no webcam found — Allow camera in your browser bar.';
+        setMediaNotice(msg);
+        showMediaToast(msg, 'error', 5500);
       }
       return;
     }
@@ -704,6 +956,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     cameraTrackRef.current.enabled = !nextVideoMuted;
     setVideoMuted(nextVideoMuted);
     emitLocalPeerState({ videoMuted: nextVideoMuted });
+    showMediaToast(nextVideoMuted ? 'Camera turned off' : 'Camera on (allowed)', nextVideoMuted ? 'info' : 'success', 2200);
   };
 
   const stopScreenShare = useCallback(async () => {
@@ -732,8 +985,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     setIsScreenSharing(false);
     setVideoMuted(nextVideoMuted);
     emitLocalPeerState({ isScreenSharing: false, videoMuted: nextVideoMuted });
+    showMediaToast('Screen sharing stopped', 'info', 2500);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emitLocalPeerState]);
+  }, [emitLocalPeerState, showMediaToast]);
 
   const handleToggleScreenShare = async () => {
     if (isScreenSharing) {
@@ -742,7 +996,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
     }
 
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setMediaNotice('Screen sharing is supported on desktop Chrome, Edge, Brave, and Safari.');
+      const msg = 'Screen sharing is supported on desktop Chrome, Edge, Brave, and Safari.';
+      setMediaNotice(msg);
+      showMediaToast(msg, 'warning', 4500);
       return;
     }
 
@@ -769,6 +1025,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
       setIsScreenSharing(true);
       emitLocalPeerState({ isScreenSharing: true, videoMuted: false });
       setMediaNotice('');
+      showMediaToast('Screen sharing is live for everyone in this call!', 'success', 3500);
     } catch {
       // User cancelled screen picker
     }
@@ -830,31 +1087,82 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
       ? 'grid-cols-1 sm:grid-cols-2'
       : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
 
+  const renderPermissionPill = (label, status) => {
+    if (status === 'granted') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+          <CheckCircle2 className="w-3 h-3 shrink-0" />
+          <span>{label}: Allowed</span>
+        </span>
+      );
+    }
+    if (status === 'denied') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          <span>{label}: Blocked</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 border border-white/15 text-[10px] font-semibold">
+        <Info className="w-3 h-3 shrink-0 text-sky-400" />
+        <span>{label}: Ask on Join</span>
+      </span>
+    );
+  };
+
   return (
     <div
-      className={`flex flex-col rounded-2xl border border-white/10 bg-neutral-950/95 overflow-hidden shadow-2xl transition-all ${
-        isExpanded
-          ? 'h-[calc(100dvh-150px)] sm:h-[clamp(400px,calc(92vh-165px),680px)]'
-          : 'h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)]'
+      ref={callContainerRef}
+      className={`flex flex-col bg-neutral-950/95 overflow-hidden shadow-2xl transition-all ${
+        isPseudoFullscreen
+          ? 'fixed inset-0 z-[100] h-[100dvh] w-screen rounded-none border-0'
+          : isNativeFullscreen
+          ? 'h-screen w-screen rounded-none border-0'
+          : 'rounded-2xl border border-white/10 h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)]'
       }`}
     >
       {/* Top Control Bar */}
-      <div className="px-4 py-3 border-b border-white/10 bg-white/5 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2.5 w-2.5">
+      <div className="px-3 sm:px-4 py-2.5 border-b border-white/10 bg-white/5 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
           </span>
           <span className="font-bold text-white flex items-center gap-1.5">
             <Video className="w-3.5 h-3.5 text-emerald-400" />
-            StudySquad Live Video &amp; Screen Share
+            StudySquad Live Video
           </span>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
             {inCall ? `${totalParticipants} in Call • Unlimited HD` : 'Unlimited • Zero Cutoff'}
           </span>
+          {inCall && (
+            <div className="hidden xl:flex items-center gap-1.5">
+              {renderPermissionPill('Cam', camPermission)}
+              {renderPermissionPill('Mic', micPermission)}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleToggleWhiteboard}
+            className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1.5 border transition-all cursor-pointer text-xs ${
+              showWhiteboard
+                ? 'bg-emerald-500 text-black border-emerald-400 shadow-sm'
+                : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
+            }`}
+            title="Open live collaborative whiteboard inside this call"
+          >
+            <PenTool className="w-3 h-3" />
+            <span>{showWhiteboard ? 'Hide Board' : 'Whiteboard'}</span>
+            {remoteDrawingAlert && !showWhiteboard && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            )}
+          </button>
+
           {user && (
             <button
               type="button"
@@ -866,7 +1174,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
               title="Set optional external Google Meet, Zoom or Discord link"
             >
               <Edit2 className="w-3 h-3 text-amber-400" />
-              <span>{isEditingMeeting ? 'Cancel' : hasCustomExternalLink ? 'Edit External Link' : 'Add Meet/Zoom Link'}</span>
+              <span className="hidden sm:inline">
+                {isEditingMeeting ? 'Cancel' : hasCustomExternalLink ? 'Edit Link' : 'Add Meet/Zoom'}
+              </span>
             </button>
           )}
 
@@ -877,26 +1187,31 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             title="Copy room invite link for classmates"
           >
             {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-            <span>{copied ? 'Copied!' : 'Invite Link'}</span>
+            <span>{copied ? 'Copied!' : 'Invite'}</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-200 border border-white/10 font-semibold inline-flex items-center gap-1 transition-all cursor-pointer"
+            onClick={handleToggleFullscreen}
+            className={`px-2.5 py-1.5 rounded-xl font-semibold inline-flex items-center gap-1 border transition-all cursor-pointer ${
+              isFullscreen
+                ? 'bg-amber-400 text-black border-amber-300'
+                : 'bg-white/10 hover:bg-white/20 text-neutral-200 border-white/10'
+            }`}
+            title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Enter Fullscreen'}
           >
-            <Maximize2 className="w-3 h-3" />
-            <span>{isExpanded ? 'Compact' : 'Expand'}</span>
+            {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
           </button>
 
           <a
             href={effectiveMeetingUrl}
             target="_blank"
             rel="noreferrer"
-            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-emerald-300 border border-emerald-500/30 font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer"
+            className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-emerald-300 border border-emerald-500/30 font-bold inline-flex items-center gap-1 transition-all cursor-pointer"
             title={`Open external ${platformName} in new tab`}
           >
-            <span>{platformName}</span>
+            <span className="hidden sm:inline">{platformName}</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
         </div>
@@ -928,22 +1243,76 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
         </form>
       )}
 
-      {/* Optional Media Notice */}
+      {/* Optional Persistent Media Warning Banner */}
       {mediaNotice && (
         <div className="px-4 py-1.5 bg-amber-500/15 border-b border-amber-500/30 text-amber-200 text-[11px] flex items-center justify-between gap-2 shrink-0">
-          <span>{mediaNotice}</span>
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>{mediaNotice}</span>
+          </span>
           <button
             type="button"
             onClick={() => setMediaNotice('')}
-            className="text-amber-300 hover:text-white font-bold cursor-pointer"
+            className="text-amber-300 hover:text-white font-bold cursor-pointer shrink-0"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Main Video Stage */}
+      {/* Main Video & Collaborative Whiteboard Stage */}
       <div className="relative flex-1 min-h-0 bg-gradient-to-b from-neutral-950 via-neutral-900/90 to-black p-3 sm:p-4 overflow-y-auto flex flex-col">
+        {/* Live Permission & Action Toast Notification */}
+        {mediaToast && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 max-w-[92%] sm:max-w-lg">
+            <div
+              className={`px-3.5 py-2 rounded-2xl border backdrop-blur-xl shadow-2xl text-xs font-semibold flex items-center gap-2 ${
+                mediaToast.tone === 'success'
+                  ? 'bg-emerald-950/90 border-emerald-400/45 text-emerald-100'
+                  : mediaToast.tone === 'warning'
+                  ? 'bg-amber-950/90 border-amber-400/45 text-amber-100'
+                  : mediaToast.tone === 'error'
+                  ? 'bg-rose-950/90 border-rose-400/45 text-rose-100'
+                  : 'bg-neutral-900/95 border-white/20 text-neutral-100'
+              }`}
+            >
+              {mediaToast.tone === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : mediaToast.tone === 'warning' || mediaToast.tone === 'error' ? (
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              ) : (
+                <Info className="w-4 h-4 text-cyan-400 shrink-0" />
+              )}
+              <span className="leading-snug">{mediaToast.message}</span>
+              <button
+                type="button"
+                onClick={() => setMediaToast(null)}
+                className="p-0.5 rounded-lg hover:bg-white/10 text-neutral-300 hover:text-white cursor-pointer shrink-0"
+                aria-label="Dismiss notification"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Teammate Drawing Alert Banner when Whiteboard is closed */}
+        {remoteDrawingAlert && !showWhiteboard && (
+          <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/35 text-xs text-emerald-200 flex items-center justify-between gap-2 shrink-0">
+            <span className="flex items-center gap-2 font-semibold">
+              <PenTool className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>A squad mate is drawing live on the shared Whiteboard!</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleWhiteboard}
+              className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-[11px] cursor-pointer shrink-0 transition-all"
+            >
+              Open Whiteboard
+            </button>
+          </div>
+        )}
+
         {/* Floating Live Emoji Reactions */}
         {reactions.length > 0 && (
           <div className="pointer-events-none absolute bottom-16 right-5 z-30 flex flex-col-reverse gap-2 items-end">
@@ -959,9 +1328,65 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           </div>
         )}
 
-        {!inCall ? (
+        {showWhiteboard ? (
+          /* Built-in Split-Screen Live Collaborative Whiteboard + Active Video Filmstrip */
+          <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-3">
+            <div className="flex-1 min-h-[240px] min-w-0 flex flex-col">
+              <Whiteboard
+                socket={socket}
+                squadId={squad?.id}
+                compact
+                className="h-full w-full"
+              />
+            </div>
+
+            {inCall && (
+              <div className="lg:w-64 xl:w-72 shrink-0 flex lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto pb-1 lg:pb-0">
+                <VideoTile
+                  stream={localStream}
+                  name={user?.name || 'You'}
+                  avatar={user?.avatar}
+                  isLocal
+                  compact
+                  audioMuted={audioMuted}
+                  videoMuted={videoMuted}
+                  isScreenSharing={isScreenSharing}
+                  isHandRaised={isHandRaised}
+                />
+                {peerEntries.map(([peerSocketId, peer]) => (
+                  <VideoTile
+                    key={peerSocketId}
+                    stream={peer.stream}
+                    name={peer.user?.name || 'Squad Mate'}
+                    avatar={peer.user?.avatar}
+                    compact
+                    audioMuted={peer.audioMuted}
+                    videoMuted={peer.videoMuted}
+                    isScreenSharing={peer.isScreenSharing}
+                    isHandRaised={peer.isHandRaised}
+                  />
+                ))}
+                {peerEntries.length === 0 && (
+                  <div className="min-w-[165px] lg:min-w-0 p-3 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] flex flex-col items-center justify-center text-center gap-1.5 shrink-0">
+                    <span className="text-[11px] font-semibold text-neutral-300">
+                      Invite squad mates to draw together
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>{copied ? 'Copied!' : 'Copy Link'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ) : !inCall ? (
           /* Pre-Join Lobby (100% Native StudySquad WebRTC — Zero 3rd-party login or 5-min Jitsi cutoff!) */
-          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4 py-2 space-y-3.5 sm:space-y-4">
+          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4 py-2 space-y-3 sm:space-y-3.5">
             <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/20 border border-emerald-500/35 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/10">
               <Video className="w-6 h-6 sm:w-7 sm:h-7" />
             </div>
@@ -971,9 +1396,20 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                 Study Together Live — {squad?.name}
               </h4>
               <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
-                Instant peer-to-peer HD video, crystal-clear voice, and live screen sharing right inside your StudySquad room. No time limits, no external sign-in required.
+                Instant peer-to-peer HD video, voice, live collaborative whiteboard, fullscreen view &amp; screen sharing inside your room.
               </p>
             </div>
+
+            {/* Live Device Permission Indicators */}
+            <div className="flex items-center justify-center gap-2 flex-wrap">
+              {renderPermissionPill('Camera', camPermission)}
+              {renderPermissionPill('Microphone', micPermission)}
+            </div>
+            {(camPermission === 'denied' || micPermission === 'denied') && (
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl max-w-md">
+                Browser permission blocked: click the camera/lock icon in your address bar, select <strong>Allow</strong>, then click Join.
+              </p>
+            )}
 
             <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
               <button
@@ -1002,7 +1438,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Encrypted WebRTC P2P
               </span>
               <span className="flex items-center gap-1">
-                <MonitorUp className="w-3.5 h-3.5 text-cyan-400" /> 1-Click Screen Share
+                <PenTool className="w-3.5 h-3.5 text-cyan-400" /> Built-In Whiteboard
               </span>
               <a
                 href={jitsiFallbackUrl}
@@ -1055,16 +1491,26 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                   You’re live in the call! Waiting for squad mates to join…
                 </p>
                 <p className="text-[11px] text-neutral-400 max-w-xs">
-                  Share the invite link so classmates can hop into this room with 1 click.
+                  Share the invite link so classmates can hop in, or open the built-in Whiteboard to draw together!
                 </p>
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? 'Invite Link Copied!' : 'Copy Squad Invite Link'}</span>
-                </button>
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Invite Link Copied!' : 'Copy Squad Invite Link'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleToggleWhiteboard}
+                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <PenTool className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Open Whiteboard</span>
+                  </button>
+                </div>
                 <a
                   href={jitsiFallbackUrl}
                   target="_blank"
@@ -1082,11 +1528,11 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
 
       {/* Bottom Call Dock (Active Call Controls or Footer Info) */}
       {inCall ? (
-        <div className="px-4 py-3 border-t border-white/10 bg-neutral-900/95 flex items-center justify-center gap-2 sm:gap-3 flex-wrap shrink-0 relative">
+        <div className="px-3 sm:px-4 py-2.5 border-t border-white/10 bg-neutral-900/95 flex items-center justify-center gap-1.5 sm:gap-2.5 flex-wrap shrink-0 relative">
           <button
             type="button"
             onClick={handleToggleMic}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
               audioMuted
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
                 : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
@@ -1099,7 +1545,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           <button
             type="button"
             onClick={handleToggleCamera}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
               videoMuted && !isScreenSharing
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
                 : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
@@ -1118,7 +1564,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           <button
             type="button"
             onClick={handleToggleScreenShare}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
               isScreenSharing
                 ? 'bg-emerald-500 text-black border-emerald-400 shadow-md shadow-emerald-500/20'
                 : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
@@ -1127,6 +1573,22 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             <MonitorUp className="w-4 h-4" />
             <span className="hidden sm:inline">
               {isScreenSharing ? 'Stop Share' : 'Share Screen'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToggleWhiteboard}
+            className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+              showWhiteboard
+                ? 'bg-emerald-500 text-black border-emerald-400 shadow-md shadow-emerald-500/20'
+                : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
+            }`}
+            title="Toggle collaborative Whiteboard inside this call"
+          >
+            <PenTool className="w-4 h-4" />
+            <span className="hidden sm:inline">
+              {showWhiteboard ? 'Close Board' : 'Whiteboard'}
             </span>
           </button>
 
@@ -1141,7 +1603,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             title="Raise hand"
           >
             <Hand className="w-4 h-4" />
-            <span className="hidden md:inline">{isHandRaised ? 'Lower Hand' : 'Raise Hand'}</span>
+            <span className="hidden lg:inline">{isHandRaised ? 'Lower Hand' : 'Raise Hand'}</span>
           </button>
 
           <div className="relative">
@@ -1152,7 +1614,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
               title="Send live reaction"
             >
               <Smile className="w-4 h-4 text-amber-300" />
-              <span className="hidden md:inline">React</span>
+              <span className="hidden lg:inline">React</span>
             </button>
 
             {showReactionsBar && (
@@ -1173,8 +1635,22 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
 
           <button
             type="button"
+            onClick={handleToggleFullscreen}
+            className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+              isFullscreen
+                ? 'bg-amber-400 text-black border-amber-300'
+                : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
+            }`}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen Call'}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            <span className="hidden md:inline">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => cleanupCall(true)}
-            className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+            className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
           >
             <PhoneOff className="w-4 h-4" />
             <span>Leave Call</span>
@@ -1185,12 +1661,12 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
             <span>
-              Built-in Unlimited WebRTC Video + External{' '}
-              <strong className="text-emerald-300 font-mono">{platformName}</strong> Ready
+              Built-in Unlimited WebRTC Video + Live Whiteboard + External{' '}
+              <strong className="text-emerald-300 font-mono">{platformName}</strong>
             </span>
           </div>
           <span>
-            Tip: Switch freely to Whiteboard, Notes, or AI Studio while staying on your call!
+            Tip: Click Fullscreen or Whiteboard anytime — everyone in the squad stays synced!
           </span>
         </div>
       )}

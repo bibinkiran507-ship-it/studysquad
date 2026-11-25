@@ -23,7 +23,7 @@ const STROKE_SIZES = [
   { label: 'Marker', value: 16 },
 ];
 
-export default function Whiteboard({ socket, squadId }) {
+export default function Whiteboard({ socket, squadId, className = '', compact = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const rectRef = useRef({ left: 0, top: 0, width: 0, height: 0 });
@@ -352,9 +352,17 @@ export default function Whiteboard({ socket, squadId }) {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)] rounded-2xl border border-white/10 bg-neutral-950/80 overflow-hidden shadow-2xl backdrop-blur-xl">
+    <div
+      className={`flex flex-col rounded-2xl border border-white/10 bg-neutral-950/80 overflow-hidden shadow-2xl backdrop-blur-xl ${
+        className || 'h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)]'
+      }`}
+    >
       {/* Whiteboard Toolbar */}
-      <div className="px-4 py-3 border-b border-white/10 bg-white/5 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div
+        className={`border-b border-white/10 bg-white/5 flex flex-wrap items-center justify-between text-xs shrink-0 ${
+          compact ? 'px-3 py-2 gap-2' : 'px-4 py-3 gap-3'
+        }`}
+      >
         {/* Tool Selectors */}
         <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10">
           <button
