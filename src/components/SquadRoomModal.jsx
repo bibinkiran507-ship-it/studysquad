@@ -1569,7 +1569,7 @@ export default function SquadRoomModal({
 
               {activeTab === 'chat' && (
                 <TabPanel key="chat">
-                  <div className="flex flex-col h-[520px] rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+                  <div className="flex flex-col h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)] rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
                     {/* Chat Header Toolbar with Save / Export Chat */}
                     <div className="px-4 py-2.5 border-b border-white/10 bg-white/5 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">

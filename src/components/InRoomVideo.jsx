@@ -49,6 +49,13 @@ function isPlaceholderUrl(url = '') {
   );
 }
 
+function buildJitsiUrl(squad) {
+  const rawSlug = String(squad?.id || squad?.name || 'room')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 36);
+  return `https://meet.jit.si/StudySquad-${rawSlug || 'LiveRoom'}`;
+}
+
 const VideoTile = memo(function VideoTile({
   stream,
   name,
@@ -86,20 +93,20 @@ const VideoTile = memo(function VideoTile({
 
   return (
     <div
-      className={`relative rounded-2xl overflow-hidden border bg-neutral-900 flex items-center justify-center group transition-all ${
+      className={`relative rounded-2xl overflow-hidden border bg-neutral-900 flex items-center justify-center group transition-all min-h-0 h-full w-full ${
         isHandRaised
           ? 'border-amber-400 shadow-lg shadow-amber-500/20'
           : isScreenSharing
           ? 'border-emerald-400/60 shadow-lg shadow-emerald-500/15'
           : 'border-white/10'
-      } ${isPinned ? 'col-span-full min-h-[300px] sm:min-h-[380px]' : 'min-h-[180px] sm:min-h-[220px]'}`}
+      } ${isPinned ? 'col-span-full min-h-[190px]' : 'min-h-[140px]'}`}
     >
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={isLocal}
-        className={`w-full h-full ${
+        className={`w-full h-full max-h-full ${
           isScreenSharing ? 'object-contain bg-black' : 'object-cover'
         } ${isLocal && !isScreenSharing ? 'scale-x-[-1]' : ''} ${
           hasLiveVideoTrack ? 'block' : 'hidden'
@@ -810,12 +817,15 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
 
   const peerEntries = Object.entries(peers);
   const totalParticipants = (inCall ? 1 : 0) + peerEntries.length;
+  const jitsiFallbackUrl = buildJitsiUrl(squad);
 
   const gridColsClass =
-    pinnedId || totalParticipants <= 1
+    pinnedId
       ? 'grid-cols-1'
-      : totalParticipants === 2
+      : peerEntries.length === 0
       ? 'grid-cols-1 md:grid-cols-2'
+      : totalParticipants === 2
+      ? 'grid-cols-1 sm:grid-cols-2'
       : totalParticipants <= 4
       ? 'grid-cols-1 sm:grid-cols-2'
       : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
@@ -823,7 +833,9 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
   return (
     <div
       className={`flex flex-col rounded-2xl border border-white/10 bg-neutral-950/95 overflow-hidden shadow-2xl transition-all ${
-        isExpanded ? 'h-[720px]' : 'h-[560px]'
+        isExpanded
+          ? 'h-[calc(100dvh-150px)] sm:h-[clamp(400px,calc(92vh-165px),680px)]'
+          : 'h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)]'
       }`}
     >
       {/* Top Control Bar */}
@@ -949,13 +961,13 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
 
         {!inCall ? (
           /* Pre-Join Lobby (100% Native StudySquad WebRTC — Zero 3rd-party login or 5-min Jitsi cutoff!) */
-          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4 space-y-5">
-            <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/20 border border-emerald-500/35 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/10">
-              <Video className="w-8 h-8" />
+          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4 py-2 space-y-3.5 sm:space-y-4">
+            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/20 border border-emerald-500/35 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/10">
+              <Video className="w-6 h-6 sm:w-7 sm:h-7" />
             </div>
 
-            <div className="space-y-1.5">
-              <h4 className="text-lg sm:text-xl font-bold text-white">
+            <div className="space-y-1">
+              <h4 className="text-base sm:text-xl font-bold text-white">
                 Study Together Live — {squad?.name}
               </h4>
               <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
@@ -963,12 +975,12 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
               <button
                 type="button"
                 disabled={isJoining}
                 onClick={() => handleJoinCall(true)}
-                className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-50"
+                className="px-5 py-2.5 sm:py-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-50"
               >
                 <PhoneCall className="w-4 h-4" />
                 <span>{isJoining ? 'Connecting...' : 'Join with Camera & Mic'}</span>
@@ -978,28 +990,34 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                 type="button"
                 disabled={isJoining}
                 onClick={() => handleJoinCall(false)}
-                className="px-4 py-3 rounded-2xl bg-white/10 hover:bg-white/15 text-white border border-white/15 font-bold text-xs sm:text-sm inline-flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="px-4 py-2.5 sm:py-3 rounded-2xl bg-white/10 hover:bg-white/15 text-white border border-white/15 font-bold text-xs sm:text-sm inline-flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
                 <Mic className="w-4 h-4 text-emerald-400" />
                 <span>Join Voice Only (Cam Off)</span>
               </button>
             </div>
 
-            <div className="flex items-center justify-center gap-4 text-[11px] text-neutral-400 pt-1 flex-wrap">
+            <div className="flex items-center justify-center gap-3 sm:gap-4 text-[11px] text-neutral-400 flex-wrap">
               <span className="flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Encrypted WebRTC P2P
               </span>
               <span className="flex items-center gap-1">
                 <MonitorUp className="w-3.5 h-3.5 text-cyan-400" /> 1-Click Screen Share
               </span>
-              <span className="flex items-center gap-1">
-                <Users className="w-3.5 h-3.5 text-violet-400" /> Switch tabs without dropping call
-              </span>
+              <a
+                href={jitsiFallbackUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-300/90 hover:text-emerald-200 underline underline-offset-2"
+              >
+                <span>Or open Jitsi Meet</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
             </div>
           </div>
         ) : (
           /* Active Multi-Student Video Grid */
-          <div className={`grid ${gridColsClass} gap-3 flex-1 auto-rows-fr`}>
+          <div className={`grid ${gridColsClass} gap-3 flex-1 min-h-0 auto-rows-fr`}>
             <VideoTile
               stream={localStream}
               name={user?.name || 'You'}
@@ -1031,7 +1049,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             ))}
 
             {peerEntries.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] p-6 flex flex-col items-center justify-center text-center min-h-[180px] space-y-2.5">
+              <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] p-4 sm:p-6 flex flex-col items-center justify-center text-center min-h-[140px] h-full space-y-2.5">
                 <Users className="w-7 h-7 text-emerald-400/70" />
                 <p className="text-xs sm:text-sm font-bold text-neutral-200">
                   You’re live in the call! Waiting for squad mates to join…
@@ -1047,6 +1065,15 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                   {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copied ? 'Invite Link Copied!' : 'Copy Squad Invite Link'}</span>
                 </button>
+                <a
+                  href={jitsiFallbackUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-neutral-400 hover:text-emerald-300 inline-flex items-center gap-1 pt-0.5 transition-colors"
+                >
+                  <span>Strict college Wi-Fi? Open Jitsi Meet</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
               </div>
             )}
           </div>

@@ -352,7 +352,7 @@ export default function Whiteboard({ socket, squadId }) {
   };
 
   return (
-    <div className="flex flex-col h-[520px] rounded-2xl border border-white/10 bg-neutral-950/80 overflow-hidden shadow-2xl backdrop-blur-xl">
+    <div className="flex flex-col h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)] rounded-2xl border border-white/10 bg-neutral-950/80 overflow-hidden shadow-2xl backdrop-blur-xl">
       {/* Whiteboard Toolbar */}
       <div className="px-4 py-3 border-b border-white/10 bg-white/5 flex flex-wrap items-center justify-between gap-3 text-xs">
         {/* Tool Selectors */}
