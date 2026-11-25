@@ -543,6 +543,22 @@ io.on('connection', (socket) => {
     const cleanStrokes = [];
     for (const s of rawIncoming) {
       if (!s || typeof s !== 'object') continue;
+      if (s.type === 'text') {
+        const x = Number(s.x);
+        const y = Number(s.y);
+        const rawText = typeof s.text === 'string' ? s.text.replace(/\r/g, '').slice(0, 500) : '';
+        if (Number.isFinite(x) && Number.isFinite(y) && rawText.trim().length > 0) {
+          cleanStrokes.push({
+            type: 'text',
+            x: Math.max(0, Math.min(1, x)),
+            y: Math.max(0, Math.min(1, y)),
+            text: rawText,
+            color: typeof s.color === 'string' ? s.color.slice(0, 32) : '#FFFFFF',
+            fontSize: Number.isFinite(s.fontSize) ? Math.max(12, Math.min(48, s.fontSize)) : 18,
+          });
+        }
+        continue;
+      }
       const prevX = typeof s.prevX === 'number' ? s.prevX : s.x1;
       const prevY = typeof s.prevY === 'number' ? s.prevY : s.y1;
       const currX = typeof s.currX === 'number' ? s.currX : s.x2;

@@ -1,9 +1,12 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   Pen,
+  Type,
   Eraser,
   Trash2,
   Download,
+  Check,
+  X,
 } from 'lucide-react';
 
 const COLORS = [
@@ -17,15 +20,16 @@ const COLORS = [
 ];
 
 const STROKE_SIZES = [
-  { label: 'Fine', value: 2 },
-  { label: 'Normal', value: 4 },
-  { label: 'Thick', value: 8 },
-  { label: 'Marker', value: 16 },
+  { label: 'Fine', value: 2, fontSize: 14 },
+  { label: 'Normal', value: 4, fontSize: 18 },
+  { label: 'Thick', value: 8, fontSize: 24 },
+  { label: 'Marker', value: 16, fontSize: 32 },
 ];
 
 export default function Whiteboard({ socket, squadId, className = '', compact = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const textInputRef = useRef(null);
   const rectRef = useRef({ left: 0, top: 0, width: 0, height: 0 });
   const strokesHistoryRef = useRef([]);
   const pendingOutStrokesRef = useRef([]);
@@ -34,10 +38,13 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
   const hasMovedRef = useRef(false);
   const prevPosRef = useRef({ x: 0, y: 0 });
 
-  const [tool, setTool] = useState('pen'); // 'pen' | 'eraser'
+  const [tool, setTool] = useState('pen'); // 'pen' | 'text' | 'eraser'
   const [color, setColor] = useState('#FFFFFF');
   const [strokeSize, setStrokeSize] = useState(4);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [textDraft, setTextDraft] = useState(null); // { x, y, text }
+
+  const activeFontSize = STROKE_SIZES.find((sz) => sz.value === strokeSize)?.fontSize || 18;
 
   // Auto-reset 2-step clear confirmation after 3 seconds
   useEffect(() => {
@@ -46,9 +53,29 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     return () => clearTimeout(t);
   }, [confirmClear]);
 
-  // Draw a normalized segment onto the canvas context
+  // Draw a normalized stroke or text annotation onto the canvas context
   const drawSegment = useCallback((ctx, stroke, canvasWidth, canvasHeight) => {
     if (!stroke || canvasWidth <= 0 || canvasHeight <= 0) return;
+
+    if (stroke.type === 'text' && typeof stroke.text === 'string') {
+      const px = Math.max(0, Math.min(1, Number(stroke.x) || 0)) * canvasWidth;
+      const py = Math.max(0, Math.min(1, Number(stroke.y) || 0)) * canvasHeight;
+      const fontSize = Math.max(12, Math.min(48, Number(stroke.fontSize) || 18));
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = stroke.color || '#FFFFFF';
+      ctx.font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      ctx.textBaseline = 'top';
+      const lines = stroke.text.replace(/\r/g, '').split('\n');
+      const lineHeight = fontSize * 1.32;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], px, py + i * lineHeight);
+      }
+      ctx.restore();
+      return;
+    }
+
     const fromX = stroke.prevX * canvasWidth;
     const fromY = stroke.prevY * canvasHeight;
     const toX = stroke.currX * canvasWidth;
@@ -279,14 +306,71 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     hasMovedRef.current = false;
   };
 
+  // Commit inline text box onto the shared canvas
+  const commitTextDraft = (draftToCommit = textDraft) => {
+    if (!draftToCommit) return;
+    const cleanText = String(draftToCommit.text || '').replace(/\r/g, '').trimEnd();
+    setTextDraft(null);
+    if (!cleanText.trim()) return;
+
+    emitLocalStroke({
+      type: 'text',
+      x: draftToCommit.x,
+      y: draftToCommit.y,
+      text: cleanText.slice(0, 500),
+      color,
+      fontSize: activeFontSize,
+    });
+  };
+
+  // Place inline text cursor at clicked/tapped position
+  const openTextAt = (clientX, clientY) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    rectRef.current = rect;
+
+    if (textDraft) {
+      commitTextDraft(textDraft);
+    }
+
+    const x = Math.max(0.01, Math.min(0.86, (clientX - rect.left) / rect.width));
+    const y = Math.max(0.02, Math.min(0.88, (clientY - rect.top) / rect.height));
+    setTextDraft({ x, y, text: '' });
+    requestAnimationFrame(() => {
+      textInputRef.current?.focus();
+    });
+  };
+
+  const handleSelectTool = (nextTool) => {
+    if (textDraft) {
+      commitTextDraft(textDraft);
+    }
+    setTool(nextTool);
+  };
+
   // Mouse Handlers
   const handleMouseDown = (e) => {
     if (e.button !== 0) return;
+    if (tool === 'text') {
+      openTextAt(e.clientX, e.clientY);
+      return;
+    }
     startDrawing(e.clientX, e.clientY);
   };
-  const handleMouseMove = (e) => draw(e.clientX, e.clientY);
-  const handleMouseUp = () => stopDrawing();
-  const handleMouseLeave = () => stopDrawing();
+  const handleMouseMove = (e) => {
+    if (tool === 'text') return;
+    draw(e.clientX, e.clientY);
+  };
+  const handleMouseUp = () => {
+    if (tool === 'text') return;
+    stopDrawing();
+  };
+  const handleMouseLeave = () => {
+    if (tool === 'text') return;
+    stopDrawing();
+  };
 
   // Touch Handlers for tablets / mobile (ignore multi-touch pinch/zoom)
   const handleTouchStart = (e) => {
@@ -296,10 +380,15 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     }
     e.preventDefault();
     const touch = e.touches[0];
+    if (tool === 'text') {
+      openTextAt(touch.clientX, touch.clientY);
+      return;
+    }
     startDrawing(touch.clientX, touch.clientY);
   };
 
   const handleTouchMove = (e) => {
+    if (tool === 'text') return;
     if (e.touches.length > 1) {
       isDrawingRef.current = false;
       return;
@@ -310,6 +399,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
   };
 
   const handleTouchEnd = (e) => {
+    if (tool === 'text') return;
     e.preventDefault();
     stopDrawing();
   };
@@ -321,6 +411,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       return;
     }
     setConfirmClear(false);
+    setTextDraft(null);
     strokesHistoryRef.current = [];
     const canvas = canvasRef.current;
     if (canvas) {
@@ -367,7 +458,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
         <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10">
           <button
             type="button"
-            onClick={() => setTool('pen')}
+            onClick={() => handleSelectTool('pen')}
             className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
               tool === 'pen'
                 ? 'bg-emerald-500 text-black shadow-md'
@@ -381,7 +472,21 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
 
           <button
             type="button"
-            onClick={() => setTool('eraser')}
+            onClick={() => handleSelectTool('text')}
+            className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              tool === 'text'
+                ? 'bg-cyan-400 text-black shadow-md'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+            title="Type notes, formulas, or labels anywhere on the board"
+          >
+            <Type className="w-3.5 h-3.5" />
+            <span>Type</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSelectTool('eraser')}
             className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
               tool === 'eraser'
                 ? 'bg-rose-500 text-white shadow-md'
@@ -394,8 +499,8 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           </button>
         </div>
 
-        {/* Color Palette (Active when using Pen) */}
-        {tool === 'pen' && (
+        {/* Color Palette (Active when Drawing or Typing) */}
+        {(tool === 'pen' || tool === 'text') && (
           <div className="flex items-center gap-1.5 bg-black/40 px-2.5 py-1.5 rounded-xl border border-white/10">
             {COLORS.map((c) => (
               <button
@@ -463,7 +568,9 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       {/* Canvas Drawing Area with Graph Dot Grid */}
       <div
         ref={containerRef}
-        className="relative flex-1 bg-[#121212] overflow-hidden cursor-crosshair touch-none select-none"
+        className={`relative flex-1 bg-[#121212] overflow-hidden touch-none select-none ${
+          tool === 'text' ? 'cursor-text' : 'cursor-crosshair'
+        }`}
         style={{
           backgroundImage:
             'radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px)',
@@ -482,13 +589,79 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           className="absolute inset-0 w-full h-full block"
         />
 
+        {/* Inline Floating Text Editor when Type tool is active */}
+        {textDraft && (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            style={{
+              left: `${textDraft.x * 100}%`,
+              top: `${textDraft.y * 100}%`,
+              maxWidth: `calc(100% - ${textDraft.x * 100}% - 12px)`,
+            }}
+            className="absolute z-20 flex flex-col gap-1.5 min-w-[180px]"
+          >
+            <textarea
+              ref={textInputRef}
+              rows={2}
+              value={textDraft.text}
+              onChange={(e) =>
+                setTextDraft((prev) => (prev ? { ...prev, text: e.target.value } : null))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitTextDraft(textDraft);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setTextDraft(null);
+                }
+              }}
+              placeholder="Type text, formula, or code…"
+              style={{
+                color,
+                fontSize: `${activeFontSize}px`,
+                lineHeight: 1.32,
+              }}
+              className="w-full min-w-[180px] sm:min-w-[240px] px-2.5 py-1.5 rounded-xl bg-black/80 backdrop-blur-md border border-cyan-400/70 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 font-semibold placeholder-neutral-500 resize shadow-2xl select-text"
+            />
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => commitTextDraft(textDraft)}
+                className="px-2.5 py-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black text-[11px] font-extrabold inline-flex items-center gap-1 shadow cursor-pointer"
+              >
+                <Check className="w-3 h-3" />
+                <span>Place (Enter)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextDraft(null)}
+                className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 text-[11px] font-semibold inline-flex items-center gap-1 border border-white/10 cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+                <span>Cancel</span>
+              </button>
+              <span className="text-[10px] text-neutral-400 hidden sm:inline">
+                Shift+Enter for new line
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Live Sync Banner Badge */}
         <div className="absolute bottom-3 left-3 pointer-events-none flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-[11px] text-neutral-300">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
           </span>
-          <span>Live Collaborative Board • Everyone in squad sees your strokes</span>
+          <span>
+            {tool === 'text'
+              ? 'Type Mode • Click anywhere on the board to type (Enter to place, Shift+Enter for new line)'
+              : 'Live Collaborative Board • Everyone in squad sees your drawings & text'}
+          </span>
         </div>
       </div>
     </div>
