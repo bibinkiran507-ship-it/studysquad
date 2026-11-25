@@ -138,15 +138,23 @@ const VideoTile = memo(function VideoTile({
                 e.currentTarget.onerror = null;
                 e.currentTarget.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(name || 'Student')}`;
               }}
-              className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-emerald-500/40 shadow-xl bg-neutral-800"
+              className={`${
+                compact ? 'w-12 h-12 sm:w-14 sm:h-14 mb-4' : 'w-16 h-16 sm:w-20 sm:h-20'
+              } rounded-full object-cover border-2 border-emerald-500/40 shadow-xl bg-neutral-800`}
             />
             {!audioMuted && (
-              <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-500 border-2 border-neutral-900" />
+              <span
+                className={`absolute ${
+                  compact ? 'bottom-3.5 -right-0.5 w-3.5 h-3.5' : '-bottom-0.5 -right-0.5 w-4 h-4'
+                } rounded-full bg-emerald-500 border-2 border-neutral-900`}
+              />
             )}
           </div>
-          <span className="text-xs font-semibold text-neutral-300">
-            {name} {isLocal ? '(You)' : ''}
-          </span>
+          {!compact && (
+            <span className="text-xs font-semibold text-neutral-300">
+              {name} {isLocal ? '(You)' : ''}
+            </span>
+          )}
         </div>
       )}
 
@@ -849,12 +857,29 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
 
   const replaceOutgoingVideoTrack = async (newVideoTrack) => {
     for (const [peerId, pc] of pcsRef.current.entries()) {
-      const videoSender = pc
-        .getSenders()
-        .find((s) => s.track?.kind === 'video');
+      const videoTransceiver = pc
+        .getTransceivers()
+        .find(
+          (t) =>
+            t.sender?.track?.kind === 'video' ||
+            t.receiver?.track?.kind === 'video'
+        );
+      const videoSender =
+        videoTransceiver?.sender ||
+        pc.getSenders().find((s) => s.track?.kind === 'video');
+
       if (videoSender) {
         try {
           await videoSender.replaceTrack(newVideoTrack);
+          if (newVideoTrack && videoTransceiver && videoTransceiver.direction === 'recvonly') {
+            videoTransceiver.direction = 'sendrecv';
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket?.emit('video_signal_send', {
+              to: peerId,
+              signal: { type: 'offer', sdp: pc.localDescription },
+            });
+          }
         } catch {}
       } else if (newVideoTrack && localStreamRef.current) {
         try {
@@ -922,41 +947,62 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
       return;
     }
 
-    const stream = localStreamRef.current;
-    if (!cameraTrackRef.current || cameraTrackRef.current.readyState === 'ended') {
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        });
-        const newCamTrack = camStream.getVideoTracks()[0];
-        if (newCamTrack && stream) {
-          stream.getVideoTracks().forEach((old) => stream.removeTrack(old));
-          stream.addTrack(newCamTrack);
-          cameraTrackRef.current = newCamTrack;
-          await replaceOutgoingVideoTrack(newCamTrack);
-          setLocalStream(new MediaStream(stream.getTracks()));
-          setCamPermission('granted');
-          setVideoMuted(false);
-          emitLocalPeerState({ videoMuted: false });
-          setMediaNotice('');
-          showMediaToast('Camera allowed & turned on!', 'success', 3500);
-        }
-      } catch (err) {
-        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-          setCamPermission('denied');
-        }
-        const msg = 'Camera permission blocked or no webcam found — Allow camera in your browser bar.';
-        setMediaNotice(msg);
-        showMediaToast(msg, 'error', 5500);
+    const stream = localStreamRef.current || new MediaStream();
+    localStreamRef.current = stream;
+
+    // Turning camera OFF: physically stop the webcam hardware track so the laptop camera LED turns OFF immediately
+    if (!videoMuted) {
+      if (cameraTrackRef.current) {
+        try {
+          cameraTrackRef.current.stop();
+        } catch {}
+        cameraTrackRef.current = null;
       }
+      stream.getVideoTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {}
+        stream.removeTrack(track);
+      });
+      await replaceOutgoingVideoTrack(null);
+      setLocalStream(new MediaStream(stream.getTracks()));
+      setVideoMuted(true);
+      emitLocalPeerState({ videoMuted: true });
+      showMediaToast('Camera turned off (webcam hardware released)', 'info', 2500);
       return;
     }
 
-    const nextVideoMuted = !videoMuted;
-    cameraTrackRef.current.enabled = !nextVideoMuted;
-    setVideoMuted(nextVideoMuted);
-    emitLocalPeerState({ videoMuted: nextVideoMuted });
-    showMediaToast(nextVideoMuted ? 'Camera turned off' : 'Camera on (allowed)', nextVideoMuted ? 'info' : 'success', 2200);
+    // Turning camera ON: acquire fresh webcam stream and resume sending to all connected peers
+    try {
+      const camStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      });
+      const newCamTrack = camStream.getVideoTracks()[0];
+      if (newCamTrack) {
+        stream.getVideoTracks().forEach((old) => {
+          try {
+            old.stop();
+          } catch {}
+          stream.removeTrack(old);
+        });
+        stream.addTrack(newCamTrack);
+        cameraTrackRef.current = newCamTrack;
+        await replaceOutgoingVideoTrack(newCamTrack);
+        setLocalStream(new MediaStream(stream.getTracks()));
+        setCamPermission('granted');
+        setVideoMuted(false);
+        emitLocalPeerState({ videoMuted: false });
+        setMediaNotice('');
+        showMediaToast('Camera allowed & turned on!', 'success', 3000);
+      }
+    } catch (err) {
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        setCamPermission('denied');
+      }
+      const msg = 'Camera permission blocked or no webcam found — Allow camera in your browser bar.';
+      setMediaNotice(msg);
+      showMediaToast(msg, 'error', 5500);
+    }
   };
 
   const stopScreenShare = useCallback(async () => {
@@ -1139,8 +1185,37 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           </span>
           {inCall && (
             <div className="hidden xl:flex items-center gap-1.5">
-              {renderPermissionPill('Cam', camPermission)}
-              {renderPermissionPill('Mic', micPermission)}
+              {camPermission === 'denied' ? (
+                renderPermissionPill('Cam', 'denied')
+              ) : isScreenSharing ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                  <MonitorUp className="w-3 h-3 shrink-0" />
+                  <span>Screen: Sharing</span>
+                </span>
+              ) : videoMuted ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                  <VideoOff className="w-3 h-3 shrink-0" />
+                  <span>Cam: Off</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <span>Cam: On</span>
+                </span>
+              )}
+              {micPermission === 'denied' ? (
+                renderPermissionPill('Mic', 'denied')
+              ) : audioMuted ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                  <MicOff className="w-3 h-3 shrink-0" />
+                  <span>Mic: Muted</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <span>Mic: On</span>
+                </span>
+              )}
             </div>
           )}
         </div>
