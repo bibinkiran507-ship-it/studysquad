@@ -550,9 +550,11 @@ io.on('connection', (socket) => {
       if (s.type === 'text') {
         const x = Number(s.x);
         const y = Number(s.y);
+        const id = typeof s.id === 'string' && s.id.trim() ? s.id.trim().slice(0, 64) : '';
         const rawText = typeof s.text === 'string' ? s.text.replace(/\r/g, '').slice(0, 500) : '';
-        if (Number.isFinite(x) && Number.isFinite(y) && rawText.trim().length > 0) {
+        if (Number.isFinite(x) && Number.isFinite(y) && (rawText.trim().length > 0 || Boolean(id))) {
           cleanStrokes.push({
+            ...(id ? { id } : {}),
             type: 'text',
             x: Math.max(0, Math.min(1, x)),
             y: Math.max(0, Math.min(1, y)),
@@ -594,7 +596,22 @@ io.on('connection', (socket) => {
       squadWhiteboards.set(squadId, []);
     }
     const roomStrokes = squadWhiteboards.get(squadId);
-    roomStrokes.push(...cleanStrokes);
+    for (const item of cleanStrokes) {
+      if (item.type === 'text' && item.id) {
+        const existingIdx = roomStrokes.findIndex(
+          (e) => e && e.type === 'text' && e.id === item.id
+        );
+        if (item.text.trim().length === 0) {
+          if (existingIdx !== -1) roomStrokes.splice(existingIdx, 1);
+        } else if (existingIdx !== -1) {
+          roomStrokes[existingIdx] = item;
+        } else {
+          roomStrokes.push(item);
+        }
+      } else {
+        roomStrokes.push(item);
+      }
+    }
     if (roomStrokes.length > 4000) {
       roomStrokes.splice(0, roomStrokes.length - 3000);
     }

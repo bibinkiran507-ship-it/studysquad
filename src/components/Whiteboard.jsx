@@ -5,8 +5,6 @@ import {
   Eraser,
   Trash2,
   Download,
-  Check,
-  X,
 } from 'lucide-react';
 
 const COLORS = [
@@ -26,10 +24,14 @@ const STROKE_SIZES = [
   { label: 'Marker', value: 16, fontSize: 32 },
 ];
 
+const createTextItemId = () =>
+  `txt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
 export default function Whiteboard({ socket, squadId, className = '', compact = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const textInputRef = useRef(null);
+  const activeTextIdRef = useRef(null);
   const rectRef = useRef({ left: 0, top: 0, width: 0, height: 0 });
   const strokesHistoryRef = useRef([]);
   const pendingOutStrokesRef = useRef([]);
@@ -42,12 +44,12 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
   const [color, setColor] = useState('#FFFFFF');
   const [strokeSize, setStrokeSize] = useState(4);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [textDraft, setTextDraft] = useState(null); // { x, y, text }
+  const [textDraft, setTextDraft] = useState(null); // { id, x, y, text }
   const [remoteDrafts, setRemoteDrafts] = useState({}); // socketId -> { userName, x, y, text, color, fontSize }
 
   const activeFontSize = STROKE_SIZES.find((sz) => sz.value === strokeSize)?.fontSize || 18;
 
-  // Broadcast live typing preview to everyone in the squad character-by-character
+  // Broadcast live typing indicator badge to teammates (optional lightweight presence)
   const emitLiveTextDraft = useCallback(
     (draftPayload) => {
       if (!socket || !squadId) return;
@@ -58,6 +60,31 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     },
     [socket, squadId]
   );
+
+  const upsertHistoryItem = useCallback((item) => {
+    const list = strokesHistoryRef.current;
+    if (item && item.type === 'text' && item.id) {
+      const idx = list.findIndex((e) => e && e.type === 'text' && e.id === item.id);
+      if (!String(item.text || '').trim()) {
+        if (idx !== -1) {
+          list.splice(idx, 1);
+          return true;
+        }
+        return false;
+      }
+      if (idx !== -1) {
+        list[idx] = item;
+        return true;
+      }
+      list.push(item);
+      return true;
+    }
+    list.push(item);
+    if (list.length > 3000) {
+      strokesHistoryRef.current = list.slice(-3000);
+    }
+    return false;
+  }, []);
 
   // Sync live typing color/size changes and clear preview on unmount
   useEffect(() => {
@@ -126,30 +153,36 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     ctx.restore();
   }, []);
 
-  const redrawAllStrokes = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+  const redrawAllStrokes = useCallback(
+    (includeActiveText = false) => {
+      const canvas = canvasRef.current;
+      const container = containerRef.current;
+      if (!canvas || !container) return;
 
-    const rect = container.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    rectRef.current = rect;
+      const rect = container.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      rectRef.current = rect;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(rect.width * dpr);
-    canvas.height = Math.round(rect.height * dpr);
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
 
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
 
-    const list = strokesHistoryRef.current;
-    for (let i = 0; i < list.length; i++) {
-      drawSegment(ctx, list[i], rect.width, rect.height);
-    }
-  }, [drawSegment]);
+      const activeId = includeActiveText === true ? null : activeTextIdRef.current;
+      const list = strokesHistoryRef.current;
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        if (activeId && item?.type === 'text' && item?.id === activeId) continue;
+        drawSegment(ctx, item, rect.width, rect.height);
+      }
+    },
+    [drawSegment]
+  );
 
   // Observe container visibility/size changes (especially when unhidden from display:none!)
   useEffect(() => {
@@ -205,9 +238,16 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       const incoming = Array.isArray(payload) ? payload : payload ? [payload] : [];
       if (incoming.length === 0) return;
 
-      strokesHistoryRef.current.push(...incoming);
-      if (strokesHistoryRef.current.length > 3000) {
-        strokesHistoryRef.current = strokesHistoryRef.current.slice(-3000);
+      let needsFullRedraw = false;
+      for (let i = 0; i < incoming.length; i++) {
+        if (upsertHistoryItem(incoming[i])) {
+          needsFullRedraw = true;
+        }
+      }
+
+      if (needsFullRedraw) {
+        redrawAllStrokes();
+        return;
       }
 
       const canvas = canvasRef.current;
@@ -274,7 +314,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       socket.off('whiteboard_clear', handleRemoteClear);
       socket.off('whiteboard_live_text', handleRemoteLiveText);
     };
-  }, [socket, squadId, drawSegment, redrawAllStrokes]);
+  }, [socket, squadId, drawSegment, redrawAllStrokes, upsertHistoryItem]);
 
   const emitLocalStroke = (stroke) => {
     strokesHistoryRef.current.push(stroke);
@@ -352,30 +392,38 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     hasMovedRef.current = false;
   };
 
-  // Commit inline text box permanently onto the shared canvas
-  const commitTextDraft = (draftToCommit = textDraft) => {
-    if (!draftToCommit) return;
-    const cleanText = String(draftToCommit.text || '').replace(/\r/g, '').trimEnd();
-    setTextDraft(null);
-    emitLiveTextDraft(null);
-    if (!cleanText.trim()) return;
-
-    emitLocalStroke({
+  // Stream live text changes straight to the board & every teammate immediately (zero Done/Send step!)
+  const syncLiveTextToBoard = (draftObj, nextColor = color, nextFont = activeFontSize) => {
+    if (!draftObj?.id) return;
+    const textItem = {
+      id: draftObj.id,
       type: 'text',
-      x: draftToCommit.x,
-      y: draftToCommit.y,
-      text: cleanText.slice(0, 500),
-      color,
-      fontSize: activeFontSize,
+      x: draftObj.x,
+      y: draftObj.y,
+      text: String(draftObj.text || '').replace(/\r/g, '').slice(0, 500),
+      color: nextColor,
+      fontSize: nextFont,
+    };
+    upsertHistoryItem(textItem);
+    socket?.emit('whiteboard_draw', { squadId, stroke: textItem });
+    emitLiveTextDraft({
+      x: draftObj.x,
+      y: draftObj.y,
+      text: '',
+      color: nextColor,
+      fontSize: nextFont,
     });
   };
 
-  const cancelTextDraft = () => {
+  // Release the typing cursor while leaving all typed text permanently on the board
+  const finishTypingCursor = () => {
+    activeTextIdRef.current = null;
     setTextDraft(null);
     emitLiveTextDraft(null);
+    redrawAllStrokes(true);
   };
 
-  // Place inline text cursor at clicked/tapped position
+  // Place live borderless text cursor directly on the board at clicked/tapped spot
   const openTextAt = (clientX, clientY) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -383,13 +431,16 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     if (rect.width === 0 || rect.height === 0) return;
     rectRef.current = rect;
 
-    if (textDraft) {
-      commitTextDraft(textDraft);
+    if (activeTextIdRef.current) {
+      activeTextIdRef.current = null;
+      redrawAllStrokes(true);
     }
 
     const x = Math.max(0.01, Math.min(0.86, (clientX - rect.left) / rect.width));
     const y = Math.max(0.02, Math.min(0.88, (clientY - rect.top) / rect.height));
-    const freshDraft = { x, y, text: '' };
+    const newId = createTextItemId();
+    activeTextIdRef.current = newId;
+    const freshDraft = { id: newId, x, y, text: '' };
     setTextDraft(freshDraft);
     emitLiveTextDraft({ x, y, text: '', color, fontSize: activeFontSize });
     requestAnimationFrame(() => {
@@ -399,7 +450,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
 
   const handleSelectTool = (nextTool) => {
     if (textDraft) {
-      commitTextDraft(textDraft);
+      finishTypingCursor();
     }
     setTool(nextTool);
   };
@@ -407,13 +458,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
   const handleSelectColor = (nextColor) => {
     setColor(nextColor);
     if (textDraft) {
-      emitLiveTextDraft({
-        x: textDraft.x,
-        y: textDraft.y,
-        text: textDraft.text,
-        color: nextColor,
-        fontSize: activeFontSize,
-      });
+      syncLiveTextToBoard(textDraft, nextColor, activeFontSize);
     }
   };
 
@@ -421,13 +466,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     setStrokeSize(nextSize);
     if (textDraft) {
       const nextFont = STROKE_SIZES.find((sz) => sz.value === nextSize)?.fontSize || 18;
-      emitLiveTextDraft({
-        x: textDraft.x,
-        y: textDraft.y,
-        text: textDraft.text,
-        color,
-        fontSize: nextFont,
-      });
+      syncLiveTextToBoard(textDraft, color, nextFont);
     }
   };
 
@@ -492,6 +531,7 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
       return;
     }
     setConfirmClear(false);
+    activeTextIdRef.current = null;
     setTextDraft(null);
     setRemoteDrafts({});
     emitLiveTextDraft(null);
@@ -505,8 +545,9 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     socket?.emit('whiteboard_clear', { squadId });
   };
 
-  // Download Canvas as PNG
+  // Download Canvas as PNG (includes any currently active live text immediately)
   const handleDownload = () => {
+    redrawAllStrokes(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -523,6 +564,10 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
     link.download = `StudySquad_Whiteboard_${Date.now()}.png`;
     link.href = exportCanvas.toDataURL('image/png');
     link.click();
+
+    if (activeTextIdRef.current) {
+      redrawAllStrokes(false);
+    }
   };
 
   return (
@@ -672,103 +717,64 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           className="absolute inset-0 w-full h-full block"
         />
 
-        {/* Live Character-by-Character Remote Teammate Typing Overlays */}
+        {/* Subtle Live Typing Indicator Badges for Remote Teammates (their text draws live on canvas!) */}
         {Object.entries(remoteDrafts).map(([peerId, rd]) => (
           <div
             key={peerId}
             style={{
               left: `${Math.max(0, Math.min(1, Number(rd.x) || 0)) * 100}%`,
-              top: `${Math.max(0, Math.min(1, Number(rd.y) || 0)) * 100}%`,
-              maxWidth: `calc(100% - ${Math.max(0, Math.min(1, Number(rd.x) || 0)) * 100}% - 12px)`,
+              top: `max(4px, calc(${Math.max(0, Math.min(1, Number(rd.y) || 0)) * 100}% - 22px))`,
             }}
             className="absolute z-10 pointer-events-none"
           >
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 mb-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[10px] font-bold text-cyan-200 backdrop-blur-md shadow">
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[10px] font-bold text-cyan-200 backdrop-blur-md shadow">
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
               <span>{rd.userName} is typing…</span>
-            </div>
-            <div
-              style={{
-                color: rd.color || '#FFFFFF',
-                fontSize: `${Math.max(12, Math.min(48, Number(rd.fontSize) || 18))}px`,
-                lineHeight: 1.32,
-              }}
-              className="font-semibold whitespace-pre-wrap break-words px-2 py-1 rounded-lg bg-black/45 border border-dashed border-cyan-400/50 backdrop-blur-xs shadow-lg"
-            >
-              {rd.text || ' '}
-              <span className="inline-block w-0.5 h-[1em] bg-cyan-400 align-middle ml-0.5 animate-pulse" />
             </div>
           </div>
         ))}
 
-        {/* Inline Floating Text Editor when Type tool is active (streams live as you type!) */}
+        {/* Direct Borderless Transparent Typing Cursor (Zero Done/Send button — every letter goes LIVE immediately!) */}
         {textDraft && (
-          <div
+          <textarea
+            ref={textInputRef}
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
+            rows={Math.max(1, textDraft.text.split('\n').length)}
+            value={textDraft.text}
+            onChange={(e) => {
+              const nextText = e.target.value.slice(0, 500);
+              const updated = { ...textDraft, text: nextText };
+              setTextDraft(updated);
+              syncLiveTextToBoard(updated, color, activeFontSize);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                finishTypingCursor();
+              }
+            }}
+            placeholder="Type directly here…"
             style={{
               left: `${textDraft.x * 100}%`,
               top: `${textDraft.y * 100}%`,
+              width: `${Math.min(
+                520,
+                Math.max(
+                  190,
+                  Math.max(...textDraft.text.split('\n').map((l) => l.length), 14) *
+                    (activeFontSize * 0.65) +
+                    24
+                )
+              )}px`,
               maxWidth: `calc(100% - ${textDraft.x * 100}% - 12px)`,
+              color,
+              fontSize: `${activeFontSize}px`,
+              lineHeight: 1.32,
             }}
-            className="absolute z-20 flex flex-col gap-1.5 min-w-[180px]"
-          >
-            <textarea
-              ref={textInputRef}
-              rows={2}
-              value={textDraft.text}
-              onChange={(e) => {
-                const nextText = e.target.value.slice(0, 500);
-                setTextDraft((prev) => (prev ? { ...prev, text: nextText } : null));
-                emitLiveTextDraft({
-                  x: textDraft.x,
-                  y: textDraft.y,
-                  text: nextText,
-                  color,
-                  fontSize: activeFontSize,
-                });
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  commitTextDraft(textDraft);
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  cancelTextDraft();
-                }
-              }}
-              placeholder="Start typing — everyone sees it LIVE…"
-              style={{
-                color,
-                fontSize: `${activeFontSize}px`,
-                lineHeight: 1.32,
-              }}
-              className="w-full min-w-[180px] sm:min-w-[260px] px-2.5 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-cyan-400/70 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 font-semibold placeholder-neutral-500 resize shadow-2xl select-text"
-            />
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => commitTextDraft(textDraft)}
-                className="px-2.5 py-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black text-[11px] font-extrabold inline-flex items-center gap-1 shadow cursor-pointer"
-              >
-                <Check className="w-3 h-3" />
-                <span>Done (Enter)</span>
-              </button>
-              <button
-                type="button"
-                onClick={cancelTextDraft}
-                className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 text-[11px] font-semibold inline-flex items-center gap-1 border border-white/10 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-                <span>Cancel</span>
-              </button>
-              <span className="text-[10px] text-cyan-300/90 font-semibold hidden sm:inline">
-                Live to everyone as you type • Shift+Enter = new line
-              </span>
-            </div>
-          </div>
+            className="absolute z-20 p-0 bg-transparent border border-dashed border-cyan-400/45 rounded-md focus:outline-none focus:border-cyan-400/80 font-semibold placeholder-neutral-500/80 resize-none overflow-hidden select-text"
+          />
         )}
 
         {/* Live Sync Banner Badge */}
@@ -779,8 +785,8 @@ export default function Whiteboard({ socket, squadId, className = '', compact = 
           </span>
           <span>
             {tool === 'text'
-              ? 'Live Type Mode • Everyone sees your letters LIVE as you type! Press Enter when done'
-              : 'Live Collaborative Board • Everyone in squad sees your drawings & live typing'}
+              ? 'Live Type • Click anywhere and type — everyone sees every letter instantly (no Send needed)'
+              : 'Live Collaborative Board • Everyone sees your drawings & typing instantly'}
           </span>
         </div>
       </div>
