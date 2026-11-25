@@ -144,7 +144,7 @@ const generalApiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 80, // Allows an entire college classroom/hostel sharing one NAT IP to sign in concurrently
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts. Please try again in 15 minutes.' },
@@ -152,9 +152,10 @@ const authLimiter = rateLimit({
 
 const aiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 30,
+  max: 120, // Supports 40+ concurrent students on shared campus Wi-Fi (per-user cap enforced by freemiumLimiter)
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET', // Never count lightweight GET /api/ai/usage checks against AI quota
   message: { error: 'AI request limit reached. Please pause briefly before asking again.' },
 });
 

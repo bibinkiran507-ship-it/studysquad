@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Calendar as CalendarIcon,
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { eventsAPI } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import RichMarkdown from './RichMarkdown';
 
 // Format YYYY-MM-DD in the student's local timezone (avoids UTC/IST off-by-1-day bug)
 function formatLocalDateInput(d = new Date()) {
@@ -37,7 +38,8 @@ function escapeIcsValue(str = '') {
 }
 
 function downloadLocalIcs(ev) {
-  const start = new Date(ev.date);
+  const parsedStart = new Date(ev.date);
+  const start = Number.isNaN(parsedStart.getTime()) ? new Date() : parsedStart;
   const end = new Date(start.getTime() + (ev.duration || 60) * 60 * 1000);
   const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const ics = [
@@ -123,6 +125,7 @@ export default function StudyCalendarModal({
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAddFormOpen, setIsAddFormOpen] = useState(false);
   const [aiPlanModal, setAiPlanModal] = useState({ isOpen: false, event: null, plan: '', loading: false });
+  const planReqIdRef = useRef(0);
   const [copiedPlan, setCopiedPlan] = useState(false);
 
   // Live timer tick for countdowns (ONLY runs while modal is open — zero idle CPU ticks!)
@@ -197,6 +200,9 @@ export default function StudyCalendarModal({
   // Filtered events
   const filteredEvents = useMemo(() => {
     if (activeFilter === 'all') return events;
+    if (activeFilter === 'exam') {
+      return events.filter((e) => e.type === 'exam' || e.type === 'deadline');
+    }
     return events.filter((e) => e.type === activeFilter);
   }, [events, activeFilter]);
 
@@ -298,12 +304,13 @@ export default function StudyCalendarModal({
   // Toggle complete
   const handleToggleComplete = async (eventItem) => {
     const updatedStatus = !eventItem.isCompleted;
+    const idStr = String(eventItem?.id || '');
     setEvents((prev) =>
       prev.map((ev) => (ev.id === eventItem.id ? { ...ev, isCompleted: updatedStatus } : ev))
     );
 
     try {
-      if (!eventItem.id.startsWith('demo-') && !eventItem.id.startsWith('local-')) {
+      if (idStr && !idStr.startsWith('demo-') && !idStr.startsWith('local-')) {
         await eventsAPI.update(eventItem.id, { isCompleted: updatedStatus });
       }
     } catch (err) {
@@ -313,9 +320,10 @@ export default function StudyCalendarModal({
 
   // Delete event
   const handleDeleteEvent = async (id) => {
+    const idStr = String(id || '');
     setEvents((prev) => prev.filter((ev) => ev.id !== id));
     try {
-      if (!id.startsWith('demo-') && !id.startsWith('local-')) {
+      if (idStr && !idStr.startsWith('demo-') && !idStr.startsWith('local-')) {
         await eventsAPI.delete(id);
       }
     } catch (err) {
@@ -325,6 +333,8 @@ export default function StudyCalendarModal({
 
   // Generate AI Exam Plan
   const handleGenerateAiPlan = async (exam) => {
+    if (aiPlanModal.loading) return;
+    const reqId = ++planReqIdRef.current;
     setAiPlanModal({ isOpen: true, event: exam, plan: '', loading: true });
     try {
       const target = new Date(exam.date).getTime();
@@ -337,6 +347,7 @@ export default function StudyCalendarModal({
         daysLeft,
       });
 
+      if (reqId !== planReqIdRef.current) return;
       setAiPlanModal({
         isOpen: true,
         event: exam,
@@ -344,6 +355,7 @@ export default function StudyCalendarModal({
         loading: false,
       });
     } catch (err) {
+      if (reqId !== planReqIdRef.current) return;
       console.error('Error getting AI study plan:', err);
       const isLimit =
         err.response?.status === 403 &&
@@ -1085,14 +1097,17 @@ export default function StudyCalendarModal({
 
                   <button
                     type="button"
-                    onClick={() => setAiPlanModal({ isOpen: false, event: null, plan: '', loading: false })}
+                    onClick={() => {
+                      planReqIdRef.current += 1;
+                      setAiPlanModal({ isOpen: false, event: null, plan: '', loading: false });
+                    }}
                     className="p-1.5 rounded-lg hover:bg-white/10 text-neutral-400 hover:text-white"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <div className="p-6 overflow-y-auto flex-1 text-sm text-neutral-200 leading-relaxed whitespace-pre-line space-y-3">
+                <div className="p-6 overflow-y-auto flex-1 text-sm text-neutral-200 leading-relaxed space-y-3">
                   {aiPlanModal.loading ? (
                     <div className="py-16 text-center space-y-3">
                       <div className="w-8 h-8 rounded-full border-2 border-violet-500/30 border-t-violet-400 animate-spin mx-auto" />
@@ -1101,7 +1116,7 @@ export default function StudyCalendarModal({
                       </p>
                     </div>
                   ) : (
-                    aiPlanModal.plan
+                    <RichMarkdown content={aiPlanModal.plan} theme="violet" />
                   )}
                 </div>
 

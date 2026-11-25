@@ -10,12 +10,14 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
   const [meetingUrl, setMeetingUrl] = useState('')
   const [schedule, setSchedule] = useState('Mon, Wed @ 7:00 PM EST')
   const [description, setDescription] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
 
   if (!isOpen) return null
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!name.trim() || !subject.trim()) return
+    if (!name.trim() || !subject.trim() || isSubmitting) return
 
     const defaultMeetingUrl =
       platform === 'Google Meet'
@@ -31,12 +33,23 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
       platform,
       meetingUrl: meetingUrl.trim() || defaultMeetingUrl,
       schedule,
-      maxMembers: 999999, // Unlimited capacity - open to all students
+      maxMembers: 100000, // Unlimited capacity - open to all students
       description: description.trim() || 'Collaborative study sessions and problem solving.',
     }
 
-    onCreateSquad(squadData)
-    onClose()
+    setIsSubmitting(true)
+    setSubmitError('')
+    try {
+      await onCreateSquad(squadData)
+      onClose()
+    } catch (err) {
+      setSubmitError(
+        err?.response?.data?.error ||
+          'Could not create squad. Please verify your meeting link starts with https:// and try again.'
+      )
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -46,7 +59,7 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-white w-full max-w-xl rounded-3xl shadow-2xl border border-neutral-100 overflow-hidden flex flex-col"
+          className="bg-white w-full max-w-xl max-h-[92vh] rounded-3xl shadow-2xl border border-neutral-100 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div className="px-6 py-5 border-b border-neutral-100 flex items-center justify-between bg-neutral-50/60">
@@ -69,7 +82,7 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
             <div>
               <label className="block text-xs font-semibold text-neutral-700 uppercase tracking-wide mb-1.5">
                 Squad Name
@@ -225,20 +238,28 @@ export default function CreateSquadModal({ isOpen, onClose, onCreateSquad }) {
               />
             </div>
 
+            {submitError && (
+              <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {submitError}
+              </div>
+            )}
+
             <div className="pt-3 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors"
+                disabled={isSubmitting}
+                className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="bg-[#1C2E1E] hover:bg-[#2C482F] text-white px-5 py-2.5 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                disabled={isSubmitting}
+                className="bg-[#1C2E1E] hover:bg-[#2C482F] text-white px-5 py-2.5 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-60"
               >
                 <Plus className="w-4 h-4" />
-                <span>Launch Squad</span>
+                <span>{isSubmitting ? 'Launching...' : 'Launch Squad'}</span>
               </button>
             </div>
           </form>

@@ -423,6 +423,7 @@ function AppInner() {
       }
     } catch (err) {
       console.error('Failed to create squad via API:', err);
+      throw err;
     }
   };
 

@@ -29,7 +29,10 @@ export function isTransientDbError(err) {
     err.code === 'P1002' || // DB server timed out
     err.code === 'P1008' || // Operations timed out
     err.code === 'P1017' || // Server has closed the connection
+    err.code === 'P2024' || // Connection pool timeout under heavy multi-user burst
     msg.includes("Can't reach database") ||
+    msg.includes('Timed out fetching a new connection') ||
+    msg.includes('Too many connections') ||
     msg.includes('Connection refused') ||
     msg.includes('connection timeout') ||
     msg.includes('Connection terminated') ||

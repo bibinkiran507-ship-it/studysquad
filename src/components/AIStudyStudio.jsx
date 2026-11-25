@@ -844,8 +844,11 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           notes: notesContext,
         });
 
-        if (res.data?.flashcards && res.data.flashcards.length > 0) {
-          setFlashcards(res.data.flashcards);
+        if (Array.isArray(res.data?.flashcards) && res.data.flashcards.length > 0) {
+          const normalizedCards = res.data.flashcards
+            .filter(Boolean)
+            .map((c, idx) => ({ ...c, id: c.id ?? `fc-${idx}` }));
+          setFlashcards(normalizedCards);
           setCurrentIndex(0);
           setMasteredIds(new Set());
           setReviewIds(new Set());
@@ -861,8 +864,14 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
           notes: notesContext,
         });
 
-        if (res.data?.quiz && res.data.quiz.length > 0) {
-          setQuizQuestions(res.data.quiz);
+        if (Array.isArray(res.data?.quiz) && res.data.quiz.length > 0) {
+          const normalizedQuiz = res.data.quiz.filter(Boolean).map((q, idx) => ({
+            ...q,
+            id: q.id ?? `q-${idx}`,
+            options: Array.isArray(q.options) ? q.options : Object.values(q.options || {}),
+            answerIndex: Number.isFinite(Number(q.answerIndex)) ? Number(q.answerIndex) : 0,
+          }));
+          setQuizQuestions(normalizedQuiz);
           setCurrentQuizIndex(0);
           setSelectedAnswers({});
           setIsQuizFinished(false);
@@ -1044,17 +1053,19 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         subject: squad?.subject || 'Academics',
         topic: activeTopic,
         level: currentLevel,
-        questionNumber: 1,
+        questionNumber: isReroll ? vivaStage : 1,
         totalQuestions: targetCount,
         excludeQuestions: exclusions,
         seed: Date.now(),
       });
 
       setVivaQuestion(res.data?.nextQuestion || `Explain the core invariant and mechanism of ${activeTopic} in your own words.`);
-      setVivaFeedback(null);
       setVivaAnswerInput('');
-      setVivaStage(1);
-      setVivaHistory([]);
+      if (!isReroll) {
+        setVivaFeedback(null);
+        setVivaStage(1);
+        setVivaHistory([]);
+      }
       setIsVivaActive(true);
       setIsVivaFinished(false);
     } catch (err) {
@@ -1072,12 +1083,14 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
         `In practical production environments, how does hardware architecture—such as CPU cache locality and branch prediction—affect the performance of ${activeTopic}?`,
         `How would you prove the termination and inductive correctness of ${activeTopic} under adversarial input conditions?`,
       ];
-      const idx = (Number(targetCount) + currentLevel.length + (isReroll ? 1 : 0)) % fallbackQuestions.length;
+      const idx = (Number(targetCount) + currentLevel.length + vivaStage + (isReroll ? 1 : 0)) % fallbackQuestions.length;
       setVivaQuestion(fallbackQuestions[idx]);
-      setVivaFeedback(null);
       setVivaAnswerInput('');
-      setVivaStage(1);
-      setVivaHistory([]);
+      if (!isReroll) {
+        setVivaFeedback(null);
+        setVivaStage(1);
+        setVivaHistory([]);
+      }
       setIsVivaActive(true);
       setIsVivaFinished(false);
     } finally {
@@ -1087,6 +1100,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleSelectRounds = async (newCount) => {
+    if (isSubmittingViva || newCount === vivaTargetCount) return;
     setVivaTargetCount(newCount);
     if (isVivaActive) {
       await handleStartViva({ overrideTarget: newCount, overrideLevel: vivaLevel });
@@ -1094,6 +1108,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleSelectRigor = async (newLvl) => {
+    if (isSubmittingViva || newLvl === vivaLevel) return;
     setVivaLevel(newLvl);
     if (isVivaActive) {
       await handleStartViva({ overrideTarget: vivaTargetCount, overrideLevel: newLvl });
@@ -1101,12 +1116,13 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
   };
 
   const handleRerollQuestion = async () => {
+    if (isSubmittingViva) return;
     await handleStartViva({ overrideTarget: vivaTargetCount, overrideLevel: vivaLevel, isReroll: true });
   };
 
   const handleSubmitVivaAnswer = async (e) => {
     e?.preventDefault();
-    if (!vivaAnswerInput.trim()) return;
+    if (isSubmittingViva || !vivaAnswerInput.trim()) return;
 
     const activeTopic = vivaTopic.trim() || customTopic.trim() || squad?.name || squad?.subject || 'Core Curriculum';
     try {
@@ -1125,14 +1141,13 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
       const entry = {
         question: vivaQuestion,
         userResponse: vivaAnswerInput.trim(),
-        score: res.data?.score || 8,
+        score: typeof res.data?.score === 'number' ? res.data.score : 8,
         feedback: res.data?.feedback || 'Good explanation. Ensure you include boundary conditions and time complexity trade-offs.',
         modelAnswer: res.data?.modelAnswer || 'Directly state the foundational invariants, time complexity trade-offs, and failure handling.',
         keyConcept: res.data?.keyConcept || 'Core Principle',
       };
 
-      const updatedHistory = [...vivaHistory, entry];
-      setVivaHistory(updatedHistory);
+      setVivaHistory((prev) => [...prev, entry]);
       setVivaFeedback(entry);
       setVivaAnswerInput('');
 
@@ -1202,10 +1217,11 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
       const img = new Image();
       img.onload = () => {
-        // Auto-scale huge 4K/retina screenshots to max 1600px to ensure ultra-fast upload & 0 server errors
+        // Auto-scale huge 4K/retina screenshots to max 1600px & pad tiny <64px crops so all vision models succeed
         const maxDim = 1600;
-        let width = img.width;
-        let height = img.height;
+        const minDim = 64;
+        let width = img.width || minDim;
+        let height = img.height || minDim;
         if (width > maxDim || height > maxDim) {
           if (width > height) {
             height = Math.round((height * maxDim) / width);
@@ -1215,12 +1231,18 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
             height = maxDim;
           }
         }
+        const outW = Math.max(minDim, width);
+        const outH = Math.max(minDim, height);
         const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = outW;
+        canvas.height = outH;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, outW, outH);
+          const dx = Math.floor((outW - width) / 2);
+          const dy = Math.floor((outH - height) / 2);
+          ctx.drawImage(img, dx, dy, width, height);
           const optimized = canvas.toDataURL('image/jpeg', 0.88);
           setChatPastedImage(optimized);
         } else {
@@ -1955,7 +1977,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                   {/* BACK SIDE (ROTATED 180 DEG) */}
                   <div className="absolute inset-0 p-6 sm:p-8 rounded-3xl backface-hidden rotate-y-180 flex flex-col justify-between bg-gradient-to-br from-[#121b18] via-neutral-900 to-black">
-                    <div>
+                    <div className="flex-1 min-h-0 overflow-y-auto pr-1">
                       <div className="flex items-center justify-between mb-4">
                         <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-teal-500/20 text-teal-300 border border-teal-500/30 uppercase tracking-wider flex items-center gap-1">
                           <Check className="w-3 h-3 text-teal-400" /> Explanation & Solution
@@ -2073,7 +2095,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                   {/* 4 Choices */}
                   <div className="space-y-2.5">
-                    {currentQuestion?.options?.map((option, optIdx) => {
+                    {(Array.isArray(currentQuestion?.options) ? currentQuestion.options : []).map((option, optIdx) => {
                       const isSelected = selectedAnswers[currentQuizIndex] === optIdx;
                       const isCorrect = optIdx === currentQuestion.answerIndex;
                       const hasChosen = hasAnsweredCurrent;
@@ -2204,8 +2226,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
 
                   <button
                     type="button"
+                    disabled={isGenerating}
                     onClick={() => handleGenerate('quiz')}
-                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-violet-500/20 transition-all cursor-pointer"
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-violet-500/20 transition-all cursor-pointer disabled:opacity-50"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>Generate New Quiz</span>
@@ -2291,8 +2314,9 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
               <button
                 key={idx}
                 type="button"
+                disabled={isChatLoading}
                 onClick={() => handleSendChatMessage(promptText)}
-                className="px-3 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300 text-xs whitespace-nowrap transition-all cursor-pointer shrink-0 hover:border-blue-400/40"
+                className="px-3 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300 text-xs whitespace-nowrap transition-all cursor-pointer shrink-0 hover:border-blue-400/40 disabled:opacity-40"
               >
                 {promptText}
               </button>
@@ -2468,7 +2492,6 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                onPaste={handleChatPaste}
                 placeholder={
                   chatPastedImage
                     ? 'Ask a question about this screenshot (or press Enter to solve)...'
@@ -2737,7 +2760,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                         </p>
                         <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-sm font-black">
                           <span>Average Score:</span>
-                          <span>{(vivaHistory.reduce((acc, h) => acc + (h.score || 8), 0) / (vivaHistory.length || 1)).toFixed(1)} / 10</span>
+                          <span>{(vivaHistory.reduce((acc, h) => acc + (typeof h.score === 'number' ? h.score : 8), 0) / (vivaHistory.length || 1)).toFixed(1)} / 10</span>
                         </div>
                       </div>
 
@@ -2969,7 +2992,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                       ⚠️ Top 3 Deadly Exam Pitfalls:
                     </p>
                     <ul className="space-y-2">
-                      {feynmanResult.examTraps?.map((trap, idx) => (
+                      {(Array.isArray(feynmanResult.examTraps) ? feynmanResult.examTraps : []).map((trap, idx) => (
                         <li key={idx} className="flex items-start gap-2.5 text-xs sm:text-sm text-neutral-300">
                           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                           <span>{renderInlineAcademicText(trap, 'amber')}</span>
@@ -3112,7 +3135,7 @@ function getClientFallbackQuiz(subject = '', category = '', topic = '') {
                 </p>
 
                 {/* Edge Cases */}
-                {auditResult.edgeCases && (
+                {Array.isArray(auditResult.edgeCases) && auditResult.edgeCases.length > 0 && (
                   <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 space-y-2">
                     <p className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5" />

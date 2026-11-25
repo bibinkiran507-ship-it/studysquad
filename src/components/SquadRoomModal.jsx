@@ -179,6 +179,14 @@ export default function SquadRoomModal({
 
   // Real-time Chat State & History Persistence
   const [messages, setMessages] = useState(squad?.messages || []);
+  const seenMessageIdsRef = useRef(new Set());
+  useEffect(() => {
+    const nextIds = new Set();
+    for (const m of messages) {
+      if (m?.id) nextIds.add(m.id);
+    }
+    seenMessageIdsRef.current = nextIds;
+  }, [messages]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [chatSavedToast, setChatSavedToast] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
@@ -220,13 +228,17 @@ export default function SquadRoomModal({
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
   const [kickingUser, setKickingUser] = useState(null);
   const [promotingUser, setPromotingUser] = useState(null);
-  const isOwner = user && (squad?.ownerId === user.id || squad?.owner?.id === user.id);
+  const [squadDetail, setSquadDetail] = useState(null);
+  const effectiveSquad = squadDetail
+    ? { ...squad, ...squadDetail, tasks: squad?.tasks || squadDetail.tasks }
+    : squad;
+  const isOwner =
+    user &&
+    (effectiveSquad?.ownerId === user.id || effectiveSquad?.owner?.id === user.id);
 
   // Sync liveUsers from globalPresence (updates from App's background socket)
   useEffect(() => {
-    if (squad?.id && globalPresence[squad.id]) {
-      setLiveUsers(globalPresence[squad.id].users || []);
-    }
+    setLiveUsers(squad?.id ? globalPresence[squad.id]?.users || [] : []);
   }, [globalPresence, squad?.id]);
 
   // Reset persistent heavy tabs whenever modal closes or switches to a different squad
@@ -236,6 +248,10 @@ export default function SquadRoomModal({
     setHasOpenedQuiz(false);
     setHasOpenedResources(false);
     setUnreadCount(0);
+    setSquadMembers([]);
+    setSuggestedGoals([]);
+    setAiCopilotResult(null);
+    setSquadDetail(null);
     if (!isOpen) {
       setActiveTab('focus');
     }
@@ -260,7 +276,7 @@ export default function SquadRoomModal({
     };
   }, []);
 
-  // Sync squad props when modal opens or squad changes
+  // Sync squad props ONLY when modal opens or switches to a different squad (prevents task toggles from resetting chat/links)
   useEffect(() => {
     if (squad) {
       const url = squad.meetingUrl || squad.link || '';
@@ -270,19 +286,43 @@ export default function SquadRoomModal({
       setAnnouncementInput(squad.pinnedMessage || '');
       if (squad.messages) setMessages(squad.messages);
     }
-  }, [squad]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [squad?.id]);
 
-  // Fetch full persistent chat history from database on room open
+  // Hydrate full squad detail (sharedNotes, pinnedMessage, ownerId) & persistent chat history on room open
   useEffect(() => {
     if (!isOpen || !squad?.id) return;
     let isCurrent = true;
     setLoadingMessages(true);
 
     squadsAPI
+      .getById(squad.id)
+      .then((res) => {
+        if (isCurrent && res.data?.squad) {
+          const full = res.data.squad;
+          setSquadDetail(full);
+          if (full.pinnedMessage !== undefined) {
+            setAnnouncement(full.pinnedMessage || '');
+            setAnnouncementInput(full.pinnedMessage || '');
+          }
+          if (full.meetingUrl) {
+            setMeetingUrl(full.meetingUrl);
+            setMeetingInput(full.meetingUrl);
+          }
+        }
+      })
+      .catch(() => {});
+
+    squadsAPI
       .getMessages(squad.id)
       .then((res) => {
-        if (isCurrent && res.data?.messages) {
-          setMessages(res.data.messages);
+        if (isCurrent && Array.isArray(res.data?.messages)) {
+          setMessages((prev) => {
+            const dbMsgs = res.data.messages;
+            const dbIds = new Set(dbMsgs.map((m) => m.id).filter(Boolean));
+            const liveExtras = prev.filter((m) => m.id && !dbIds.has(m.id) && String(m.id).startsWith('sys-') === false);
+            return [...dbMsgs, ...liveExtras];
+          });
         }
       })
       .catch((err) => {
@@ -298,6 +338,7 @@ export default function SquadRoomModal({
     return () => {
       isCurrent = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, squad?.id]);
 
   // Initialize or reuse shared authenticated Socket.io connection when modal opens
@@ -347,36 +388,55 @@ export default function SquadRoomModal({
     };
 
     const handleReceiveMessage = (msg) => {
-      setMessages((prev) => {
-        if (msg.id && prev.some((m) => m.id === msg.id)) {
-          return prev;
-        }
-        // If user is not on the Chat tab, increment unread badge and play chime
-        if (activeTabRef.current !== 'chat' && msg.userId !== userRef.current?.id) {
-          setUnreadCount((c) => c + 1);
-          try {
-            if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-              audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            const ctx = audioCtxRef.current;
-            if (ctx.state === 'suspended') ctx.resume();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.frequency.setValueAtTime(880, ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
-            gain.gain.setValueAtTime(0, ctx.currentTime);
-            gain.gain.linearRampToValueAtTime(soundEnabledRef.current ? 0.08 : 0, ctx.currentTime + 0.01);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + 0.4);
-          } catch {
-            /* audio not available, silently ignore */
+      if (!msg) return;
+      if (msg.id && seenMessageIdsRef.current.has(msg.id)) {
+        return;
+      }
+      if (msg.id) {
+        seenMessageIdsRef.current.add(msg.id);
+      }
+
+      // If user is not on the Chat tab, increment unread badge and play chime cleanly outside state updater
+      if (activeTabRef.current !== 'chat' && msg.userId !== userRef.current?.id) {
+        setUnreadCount((c) => c + 1);
+        try {
+          if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+            audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
           }
+          const ctx = audioCtxRef.current;
+          if (ctx.state === 'suspended') ctx.resume();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
+          gain.gain.setValueAtTime(0, ctx.currentTime);
+          gain.gain.linearRampToValueAtTime(soundEnabledRef.current ? 0.08 : 0, ctx.currentTime + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.4);
+        } catch {
+          /* audio not available, silently ignore */
         }
-        return [...prev, msg];
-      });
+      }
+
+      setMessages((prev) => (msg.id && prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+    };
+
+    const handleMessageError = (payload) => {
+      const errText = payload?.error || 'Could not deliver message right now. Please try again.';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          userId: 'system',
+          user: { name: 'StudySquad Notice' },
+          content: `⚠️ ${errText}`,
+          createdAt: new Date().toISOString(),
+          isSystem: true,
+        },
+      ]);
     };
 
     // Live presence: who is currently in this room
@@ -403,6 +463,7 @@ export default function SquadRoomModal({
 
     socketInstance.on('user_joined', handleUserJoined);
     socketInstance.on('receive_message', handleReceiveMessage);
+    socketInstance.on('message_error', handleMessageError);
     socketInstance.on('room_presence_update', handleRoomPresence);
     socketInstance.on('pomodoro_sync', handlePomodoroSync);
 
@@ -410,6 +471,7 @@ export default function SquadRoomModal({
       socketInstance.off('connect', emitJoinRoom);
       socketInstance.off('user_joined', handleUserJoined);
       socketInstance.off('receive_message', handleReceiveMessage);
+      socketInstance.off('message_error', handleMessageError);
       socketInstance.off('room_presence_update', handleRoomPresence);
       socketInstance.off('pomodoro_sync', handlePomodoroSync);
       socketInstance.emit('leave_room', {
@@ -575,6 +637,7 @@ export default function SquadRoomModal({
 
   // AI Suggest Goals
   const handleSuggestGoals = async () => {
+    if (isSuggestingGoals) return;
     if (!user) {
       openAuthModal('register');
       return;
@@ -583,7 +646,10 @@ export default function SquadRoomModal({
     setIsSuggestingGoals(true);
     try {
       const res = await aiAPI.suggestGoals(squad.name, squad.subject, squad.category);
-      setSuggestedGoals(res.data.goals || []);
+      const normalizedGoals = (Array.isArray(res.data?.goals) ? res.data.goals : [])
+        .map((g) => (typeof g === 'string' ? g : g?.goal || g?.text || ''))
+        .filter(Boolean);
+      setSuggestedGoals(normalizedGoals);
       setAiPoweredBy(res.data.poweredBy || 'Gemini AI');
     } catch (err) {
       console.error('Error suggesting goals:', err);
@@ -603,6 +669,7 @@ export default function SquadRoomModal({
 
   // Squad AI Copilot quick actions (Summarize Notes & Generate Agenda)
   const handleRunAiCopilot = async (mode) => {
+    if (isAiCopilotLoading) return;
     if (!user) {
       openAuthModal('register');
       return;
@@ -617,7 +684,7 @@ export default function SquadRoomModal({
           subject: squad.subject,
           category: squad.category,
           squadName: squad.name,
-          sharedNotes: squad.sharedNotes || '',
+          sharedNotes: effectiveSquad?.sharedNotes || '',
           tasks: squad.tasks || [],
         },
         mode,
@@ -1052,7 +1119,7 @@ export default function SquadRoomModal({
               <div className={activeTab === 'video' ? 'block' : 'hidden'}>
                 <Suspense fallback={<TabLoader />}>
                   <InRoomVideo
-                    squad={squad}
+                    squad={effectiveSquad}
                     user={user}
                     socket={socket}
                   />
@@ -1064,7 +1131,7 @@ export default function SquadRoomModal({
               <div className={activeTab === 'quiz' ? 'block' : 'hidden'}>
                 <Suspense fallback={<TabLoader />}>
                   <AIStudyStudio
-                    squad={squad}
+                    squad={effectiveSquad}
                     user={user}
                     socket={socket}
                     openAuthModal={openAuthModal}
@@ -1078,7 +1145,7 @@ export default function SquadRoomModal({
               <div className={activeTab === 'resources' ? 'block' : 'hidden'}>
                 <Suspense fallback={<TabLoader />}>
                   <ResourceHub
-                    squad={squad}
+                    squad={effectiveSquad}
                     user={user}
                     socket={socket}
                     openAuthModal={openAuthModal}
@@ -1090,6 +1157,17 @@ export default function SquadRoomModal({
 
               {activeTab === 'focus' && (
                 <TabPanel key="focus">
+                {announcement && (
+                  <div className="mb-4 px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200">
+                    <Megaphone className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-amber-300 uppercase tracking-wider text-[10px] block mb-0.5">
+                        Pinned Squad Announcement
+                      </span>
+                      <p className="text-neutral-200 leading-relaxed">{announcement}</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Virtual Link Bar */}
                 <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
@@ -1240,6 +1318,10 @@ export default function SquadRoomModal({
                                     }
                                     alt={u.name}
                                     referrerPolicy="no-referrer"
+                                    onError={(e) => {
+                                      e.currentTarget.onerror = null;
+                                      e.currentTarget.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(u.name || 'User')}`;
+                                    }}
                                     className="w-7 h-7 rounded-full object-cover border-2 border-emerald-500/40"
                                   />
                                   <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-400 border border-neutral-900 shadow" />
@@ -1560,6 +1642,10 @@ export default function SquadRoomModal({
                                 }
                                 alt={msg.user?.name || 'User'}
                                 referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  e.currentTarget.onerror = null;
+                                  e.currentTarget.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(msg.user?.name || 'User')}`;
+                                }}
                                 className="w-7 h-7 rounded-full object-cover border border-white/15 mt-0.5"
                               />
                             </div>
@@ -1729,6 +1815,10 @@ export default function SquadRoomModal({
                               src={member.avatar || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(member.name)}`}
                               alt={member.name}
                               referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(member.name || 'Member')}`;
+                              }}
                               className="w-8 h-8 rounded-full border border-white/10"
                             />
                             <div className="flex-1 min-w-0">
@@ -1829,7 +1919,15 @@ export default function SquadRoomModal({
 
                       <button
                         type="button"
-                        onClick={() => setShowEventForm(!showEventForm)}
+                        onClick={() => {
+                          if (!showEventForm && !evDate) {
+                            const d = new Date();
+                            setEvDate(
+                              `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                            );
+                          }
+                          setShowEventForm(!showEventForm);
+                        }}
                         className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
                       >
                         <Plus className="w-4 h-4" />

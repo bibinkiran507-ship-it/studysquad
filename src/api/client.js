@@ -49,6 +49,7 @@ const API_BASE_URL = getApiBaseUrl();
 
 const client = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 45000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -129,6 +130,7 @@ export const squadsAPI = {
   uploadResource: (id, formData, onUploadProgress) =>
     client.post(`/squads/${id}/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
       onUploadProgress,
     }),
   // Admin controls

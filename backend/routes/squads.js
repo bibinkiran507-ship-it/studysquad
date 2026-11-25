@@ -193,7 +193,7 @@ router.get('/', optionalAuth, async (req, res) => {
         bannerGradient: squad.bannerGradient,
         owner: squad.owner,
         memberCount: squad.members.length,
-        members: squad.members.map((m) => m.user),
+        members: squad.members.slice(0, 24).map((m) => m.user),
         tasks: squad.tasks,
         isJoined,
         createdAt: squad.createdAt,
@@ -282,7 +282,7 @@ router.post('/', requireAuth, async (req, res) => {
       platform = 'StudySquad Live',
       meetingUrl = '',
       schedule = 'Mon, Wed, Fri • 8:00 PM IST',
-      maxMembers = 6,
+      maxMembers = 100000,
       bannerGradient,
     } = req.body || {};
 
@@ -314,7 +314,7 @@ router.post('/', requireAuth, async (req, res) => {
         ? bannerGradient.trim()
         : gradients[Math.floor(Math.random() * gradients.length)];
 
-    const clampedMax = Math.max(2, Math.min(50, Number(maxMembers) || 6));
+    const clampedMax = Math.max(2, Math.min(100000, Number(maxMembers) || 100000));
     const cleanName = name.trim().slice(0, 120);
     const cleanSubject = subject.trim().slice(0, 120);
 
@@ -417,7 +417,7 @@ router.post('/:id/join', requireAuth, async (req, res) => {
       });
     }
 
-    if (squad.ownerId !== req.user.id && squad.members.length >= (squad.maxMembers || 50)) {
+    if (squad.ownerId !== req.user.id && squad.members.length >= (squad.maxMembers || 100000)) {
       return res.status(400).json({ error: 'This study squad is currently full.' });
     }
 

@@ -188,7 +188,7 @@ export default function UserProfileModal({ onOpenProModal }) {
 
         {/* Modal */}
         <motion.div
-          className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden"
+          className="relative w-full max-w-lg max-h-[92vh] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden"
           initial={{ scale: 0.9, opacity: 0, y: 20 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -213,7 +213,8 @@ export default function UserProfileModal({ onOpenProModal }) {
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                     onError={(e) => {
-                      e.target.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`;
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.name)}`;
                     }}
                   />
                 </div>
@@ -353,7 +354,7 @@ export default function UserProfileModal({ onOpenProModal }) {
           </div>
 
           {/* Tab Content */}
-          <div className="px-6 pb-6 max-h-[320px] overflow-y-auto">
+          <div className="px-6 pb-6 flex-1 min-h-0 max-h-[320px] overflow-y-auto">
             {activeTab === 'profile' && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-xs text-neutral-500">

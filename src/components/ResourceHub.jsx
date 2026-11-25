@@ -104,7 +104,11 @@ function PdfSlideCard({ res, user, squad, onDelete, onChatWithDoc }) {
   const fullUrl = getFileUrl(res.url);
   const isPdf = res.category === "PDF" || res.url?.toLowerCase().endsWith(".pdf");
   const isSlide = res.category === "Slides" || res.url?.toLowerCase().match(/\.(ppt|pptx)$/);
-  const canDelete = user && (res.createdById === user.id || squad.ownerId === user.id);
+  const canDelete =
+    user &&
+    (res.createdById === user.id ||
+      squad?.ownerId === user.id ||
+      squad?.owner?.id === user.id);
 
   const badgeColor = isPdf
     ? "border-rose-500/35 bg-rose-500/10 text-rose-400"
@@ -139,7 +143,7 @@ function PdfSlideCard({ res, user, squad, onDelete, onChatWithDoc }) {
           {res.title}
         </h5>
         <p className="text-[11px] font-mono text-neutral-400 mt-1 truncate">
-          {res.url.replace(/^\/uploads\//, "")}
+          {(res.url || "").replace(/^\/uploads\//, "")}
         </p>
       </div>
 
@@ -220,7 +224,11 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
   }, [parsed]);
 
   const langColor = meta?.language ? LANGUAGE_COLORS[meta.language] || "#8b949e" : null;
-  const canDelete = user && (res.createdById === user.id || squad.ownerId === user.id);
+  const canDelete =
+    user &&
+    (res.createdById === user.id ||
+      squad?.ownerId === user.id ||
+      squad?.owner?.id === user.id);
 
   return (
     <div className="group/res relative rounded-2xl border border-violet-500/25 bg-gradient-to-br from-[#0d1117] to-[#161b22] overflow-hidden shadow-lg hover:shadow-violet-500/10 hover:border-violet-500/50 transition-all duration-300">
@@ -245,7 +253,7 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
                 rel="noreferrer"
                 className="text-sm font-bold text-white hover:text-violet-300 transition-colors truncate cursor-pointer"
               >
-                {meta
+                {meta?.owner?.login && meta?.name
                   ? `${meta.owner.login} / ${meta.name}`
                   : res.title || (parsed ? `${parsed.owner}/${parsed.repo}` : res.url)}
               </a>
@@ -350,7 +358,11 @@ function GitHubRepoCard({ res, user, squad, onDelete }) {
 function GenericResourceCard({ res, user, squad, onDelete, onChatWithDoc }) {
   const Icon = CATEGORY_ICONS[res.category] || LinkIcon;
   const colorClass = CATEGORY_COLORS[res.category] || CATEGORY_COLORS.Resource;
-  const canDelete = user && (res.createdById === user.id || squad.ownerId === user.id);
+  const canDelete =
+    user &&
+    (res.createdById === user.id ||
+      squad?.ownerId === user.id ||
+      squad?.owner?.id === user.id);
   const targetUrl = getFileUrl(res.url);
 
   return (
@@ -486,7 +498,7 @@ function DocumentAiModal({ doc, squad, user, onClose, onOpenProModal, openAuthMo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md">
-      <div className="bg-neutral-900 border border-violet-500/30 w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col h-[600px] overflow-hidden">
+      <div className="bg-neutral-900 border border-violet-500/30 w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col h-[85vh] max-h-[600px] overflow-hidden">
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-white/10 bg-white/5 flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -626,7 +638,12 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
   const [copiedNotes, setCopiedNotes] = useState(false);
   const saveTimeoutRef = useRef(null);
   const socketEmitTimeoutRef = useRef(null);
+  const statusTimeoutRef = useRef(null);
+  const isDirtyRef = useRef(false);
+  const latestNotesRef = useRef({ squadId: squad?.id, val: squad?.sharedNotes || "" });
   const [uploadError, setUploadError] = useState("");
+  const [resourceError, setResourceError] = useState("");
+  const [isSubmittingResource, setIsSubmittingResource] = useState(false);
 
   // Resources List State
   const [resources, setResources] = useState(squad.resources || []);
@@ -651,28 +668,57 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    if (squad?.id) {
-      setLoadingResources(true);
+    if (!squad?.id) return;
+    let isCurrent = true;
+    setLoadingResources(true);
+    squadsAPI
+      .getResources(squad.id)
+      .then((res) => {
+        if (isCurrent && res.data?.resources) setResources(res.data.resources);
+      })
+      .catch((err) => console.warn("Fetch resources warning:", err.message))
+      .finally(() => {
+        if (isCurrent) setLoadingResources(false);
+      });
+
+    // Hydrate saved sharedNotes from DB if not present on directory squad summary
+    if (squad.sharedNotes === undefined) {
       squadsAPI
-        .getResources(squad.id)
+        .getById(squad.id)
         .then((res) => {
-          if (res.data?.resources) setResources(res.data.resources);
+          const dbNotes = res.data?.squad?.sharedNotes;
+          if (isCurrent && !isDirtyRef.current && typeof dbNotes === "string") {
+            setNotes(dbNotes);
+            latestNotesRef.current = { squadId: squad.id, val: dbNotes };
+          }
         })
-        .catch((err) => console.warn("Fetch resources warning:", err.message))
-        .finally(() => setLoadingResources(false));
+        .catch(() => {});
     }
-  }, [squad?.id]);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [squad?.id, squad?.sharedNotes]);
 
   useEffect(() => {
-    if (squad?.sharedNotes !== undefined) setNotes(squad.sharedNotes || "");
+    if (squad?.sharedNotes !== undefined && !isDirtyRef.current) {
+      setNotes(squad.sharedNotes || "");
+      latestNotesRef.current = { squadId: squad?.id, val: squad.sharedNotes || "" };
+    }
   }, [squad?.id, squad?.sharedNotes]);
 
   useEffect(() => {
     if (!socket) return;
     const handleNotesSync = ({ notes: newNotes, updatedBy }) => {
+      if (typeof newNotes !== "string") return;
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
+      isDirtyRef.current = false;
+      latestNotesRef.current = { squadId: squad?.id, val: newNotes };
       setNotes(newNotes);
       setSaveStatus(`Updated by ${updatedBy || "teammate"}`);
-      setTimeout(() => setSaveStatus("saved"), 3000);
+      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = setTimeout(() => setSaveStatus("saved"), 3000);
     };
     const handleResourceSync = ({ action, resource, resourceId }) => {
       if (action === "added" && resource) {
@@ -687,7 +733,7 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
       socket.off("notes_sync", handleNotesSync);
       socket.off("resource_sync", handleResourceSync);
     };
-  }, [socket]);
+  }, [socket, squad?.id]);
 
   const handleUrlChange = async (e) => {
     const val = e.target.value;
@@ -701,10 +747,10 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
           const r = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`);
           if (r.ok) {
             const data = await r.json();
-            setResourceTitle(data.full_name || `${parsed.owner}/${parsed.repo}`);
+            setResourceTitle((prev) => prev || data.full_name || `${parsed.owner}/${parsed.repo}`);
           }
         } catch {
-          setResourceTitle(`${parsed.owner}/${parsed.repo}`);
+          setResourceTitle((prev) => prev || `${parsed.owner}/${parsed.repo}`);
         } finally {
           setIsFetchingGitHub(false);
         }
@@ -716,12 +762,20 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
+      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+      if (isDirtyRef.current && user && latestNotesRef.current?.squadId) {
+        squadsAPI.updateNotes(latestNotesRef.current.squadId, latestNotesRef.current.val).catch(() => {});
+        isDirtyRef.current = false;
+      }
     };
-  }, []);
+  }, [user]);
 
   const handleNoteChange = (e) => {
     const val = e.target.value;
+    isDirtyRef.current = true;
+    latestNotesRef.current = { squadId: squad.id, val };
     setNotes(val);
+    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
     setSaveStatus("saving");
     if (socketEmitTimeoutRef.current) clearTimeout(socketEmitTimeoutRef.current);
     socketEmitTimeoutRef.current = setTimeout(() => {
@@ -736,6 +790,7 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
       if (user) {
         try {
           await squadsAPI.updateNotes(squad.id, val);
+          isDirtyRef.current = false;
         } catch {
           /* silent */
         }
@@ -773,19 +828,21 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${squad.name.replace(/[^a-zA-Z0-9]/g, "_")}_StudyNotes.md`;
+    link.download = `${(squad?.name || "Squad").replace(/[^a-zA-Z0-9]/g, "_")}_StudyNotes.md`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   const handleAddResource = async (e) => {
     e.preventDefault();
-    if (!resourceTitle.trim() && !resourceUrl.trim()) return;
+    if (isSubmittingResource || (!resourceTitle.trim() && !resourceUrl.trim())) return;
     if (!user) {
       openAuthModal?.("login");
       return;
     }
+    setIsSubmittingResource(true);
     try {
+      setResourceError("");
       const payload = {
         title: resourceTitle.trim() || resourceUrl.trim(),
         url: resourceUrl.trim(),
@@ -793,14 +850,21 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
       };
       const res = await squadsAPI.addResource(squad.id, payload);
       const newRes = res.data.resource;
-      setResources((prev) => [newRes, ...prev]);
-      socket?.emit("resource_action", { squadId: squad.id, action: "added", resource: newRes });
+      if (newRes) {
+        setResources((prev) => [newRes, ...prev.filter((r) => r.id !== newRes.id)]);
+        socket?.emit("resource_action", { squadId: squad.id, action: "added", resource: newRes });
+      }
       setResourceTitle("");
       setResourceUrl("");
       setResourceCategory("Docs");
       setIsAddingResource(false);
     } catch (err) {
       console.error("Failed to add resource:", err);
+      setResourceError(
+        err?.response?.data?.error || "Please enter a valid https:// web link."
+      );
+    } finally {
+      setIsSubmittingResource(false);
     }
   };
 
@@ -1305,6 +1369,12 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
                   ))}
                 </div>
 
+                {resourceError && (
+                  <div className="p-2.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-xs font-medium">
+                    ⚠️ {resourceError}
+                  </div>
+                )}
+
                 <div className="flex items-center justify-end gap-2 pt-1">
                   <button
                     type="button"
@@ -1313,6 +1383,7 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
                       setResourceTitle("");
                       setResourceUrl("");
                       setResourceCategory("Docs");
+                      setResourceError("");
                     }}
                     className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-300 text-xs font-semibold cursor-pointer"
                   >
@@ -1320,9 +1391,10 @@ const ResourceHub = memo(function ResourceHub({ squad, user, socket, openAuthMod
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold shadow-md cursor-pointer"
+                    disabled={isSubmittingResource}
+                    className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold shadow-md cursor-pointer disabled:opacity-50"
                   >
-                    Share Resource
+                    {isSubmittingResource ? "Sharing..." : "Share Resource"}
                   </button>
                 </div>
               </form>

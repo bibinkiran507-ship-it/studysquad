@@ -168,9 +168,10 @@ const invokeModelOnce = async (genAI, modelName, contents, options, timeoutMs) =
   }
 };
 
-// Live-verified Groq models (Nov 2026): 0.4s–2.7s real AI responses
+// Live-verified Groq models (Nov 2026): 0.4s–2.7s real AI responses across 3 independent RPM pools
 const GROQ_TEXT_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
 const GROQ_VISION_MODELS = ['qwen/qwen3.8-27b'];
+let groqRoundRobinCursor = 0;
 
 export const formatPoweredBy = (aiRes) => {
   if (!aiRes) return 'StudySquad Smart Engine';
@@ -215,7 +216,14 @@ const generateWithGroq = async (contents, options = {}) => {
     return null;
   }
 
-  const candidateModels = hasImage ? GROQ_VISION_MODELS : GROQ_TEXT_MODELS;
+  let candidateModels = GROQ_VISION_MODELS;
+  if (!hasImage) {
+    const start = groqRoundRobinCursor++ % GROQ_TEXT_MODELS.length;
+    candidateModels =
+      start === 0
+        ? GROQ_TEXT_MODELS
+        : [...GROQ_TEXT_MODELS.slice(start), ...GROQ_TEXT_MODELS.slice(0, start)];
+  }
   const temperature =
     typeof options?.generationConfig?.temperature === 'number'
       ? Math.min(1, Math.max(0, options.generationConfig.temperature))
@@ -293,8 +301,9 @@ export const generateWithGemini = async (contents, options = {}) => {
     ...rotatedFast.filter((m) => (unhealthyModelUntil.get(m.name) || 0) > now),
   ];
 
-  // Pass 1: Google Gemini Fast Pair (6.5s cap when Groq instant backup is armed, 16s when Gemini-only)
-  const pass1Timeout = hasGroqKey ? 6500 : null;
+  // Pass 1: Google Gemini Fast Pair (6.5s cap for normal calls / 9.5s for dense sheets when Groq backup is armed)
+  const requestedTokens = Number(options?.generationConfig?.maxOutputTokens) || 2048;
+  const pass1Timeout = hasGroqKey ? (requestedTokens >= 2500 ? 9500 : 6500) : null;
   for (const entry of fastOrdered) {
     const attemptStart = Date.now();
     try {
