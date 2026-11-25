@@ -68,45 +68,7 @@ function downloadLocalIcs(ev) {
   URL.revokeObjectURL(url);
 }
 
-// Default starter milestones if none exist yet
-const INITIAL_DEMO_EVENTS = [
-  {
-    id: 'demo-exam-1',
-    title: 'Data Structures & Algorithms Midterm',
-    type: 'exam',
-    subject: 'Computer Science',
-    date: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000 + 5 * 60 * 60 * 1000).toISOString(),
-    description: 'Covers Trees, Heaps, Dynamic Programming, and Graph Traversals (BFS/DFS).',
-    location: 'StudySquad Room Alpha',
-    urgency: 'high',
-    squad: { name: 'CS Masters Guild', subject: 'Computer Science' },
-    isCompleted: false,
-  },
-  {
-    id: 'demo-session-2',
-    title: 'Calculus III Vector Fields Sprint',
-    type: 'session',
-    subject: 'Mathematics',
-    date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000).toISOString(),
-    description: 'Group problem solving session on Green’s Theorem & Stokes’ Theorem.',
-    location: 'StudySquad Live Whiteboard',
-    urgency: 'medium',
-    squad: { name: 'Math & Physics Lab', subject: 'Mathematics' },
-    isCompleted: false,
-  },
-  {
-    id: 'demo-exam-3',
-    title: 'Organic Chemistry II Final Exam',
-    type: 'exam',
-    subject: 'Chemistry',
-    date: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString(),
-    description: 'Reaction mechanisms, Aldol condensations, and NMR spectroscopy analysis.',
-    location: 'Exam Hall B',
-    urgency: 'critical',
-    squad: { name: 'Biochem & Pre-Med Squad', subject: 'Pre-Med' },
-    isCompleted: false,
-  },
-];
+  // Real events are loaded from PostgreSQL via GET /api/events.
 
 export default function StudyCalendarModal({
   isOpen,
@@ -142,19 +104,15 @@ export default function StudyCalendarModal({
   const [formDesc, setFormDesc] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Load events
+  // Load real events from PostgreSQL
   const loadEvents = async () => {
     try {
       setLoading(true);
       const res = await eventsAPI.getAll();
-      if (res.data?.events && res.data.events.length > 0) {
-        setEvents(res.data.events);
-      } else {
-        setEvents(INITIAL_DEMO_EVENTS);
-      }
+      setEvents(Array.isArray(res.data?.events) ? res.data.events : []);
     } catch (err) {
-      console.warn('Events fetch error, using sample events:', err.message);
-      setEvents(INITIAL_DEMO_EVENTS);
+      console.warn('Events fetch error:', err.message);
+      setEvents([]);
     } finally {
       setLoading(false);
     }
@@ -279,21 +237,11 @@ export default function StudyCalendarModal({
 
       if (newEv) {
         setEvents((prev) => [newEv, ...prev]);
-      } else {
-        // Fallback local create
-        const localEv = {
-          ...payload,
-          id: `local-${Date.now()}`,
-          squad: squads.find((s) => s.id === formSquadId) || null,
-          isCompleted: false,
-        };
-        setEvents((prev) => [localEv, ...prev]);
+        // Reset form
+        setFormTitle('');
+        setFormDesc('');
+        setIsAddFormOpen(false);
       }
-
-      // Reset form
-      setFormTitle('');
-      setFormDesc('');
-      setIsAddFormOpen(false);
     } catch (err) {
       console.error('Failed to create event:', err);
     } finally {
@@ -361,25 +309,12 @@ export default function StudyCalendarModal({
         err.response?.status === 403 &&
         (err.response?.data?.error === 'DAILY_AI_LIMIT_REACHED' ||
           err.response?.data?.upgradeRequired);
-      const target = new Date(exam.date).getTime();
-      const daysLeft = Math.max(1, Math.ceil((target - Date.now()) / (1000 * 60 * 60 * 24)));
-      const fallback =
-        `📅 **${daysLeft}-Day Exam Countdown Strategy: ${exam.title || exam.subject}**\n\n` +
-        `🎯 **Phase 1: Diagnostic & High-Yield Concepts (Days 1–${Math.max(1, Math.floor(daysLeft * 0.4))})**\n` +
-        `• Audit the syllabus: identify high-weight topics and formula derivations.\n` +
-        `• Build active recall flashcards in the AI Quiz & Cards studio.\n\n` +
-        `🔥 **Phase 2: Intensive Problem Sets & Mock Exams (Days ${Math.max(2, Math.floor(daysLeft * 0.4) + 1)}–${Math.max(2, daysLeft - 1)})**\n` +
-        `• Practice timed past exam questions under 25-minute Pomodoro sprints.\n` +
-        `• Host a peer whiteboard review session in your Squad Room.\n\n` +
-        `🏆 **Phase 3: Final Polish (Day Before Exam)**\n` +
-        `• Light formula sheet scan, prepare your exam kit, and get 8 hours of sleep!` +
-        (isLimit
-          ? `\n\n👑 *Note: You've used your 5 free daily AI credits today. Upgrade to StudySquad Pro for unlimited custom Gemini exam plans!*`
-          : '');
-
       setAiPlanModal((prev) => ({
         ...prev,
-        plan: fallback,
+        plan: isLimit
+          ? `👑 **You've used all 5 free daily AI credits for today!**\n\nUpgrade to **StudySquad Pro (₹199/month)** for unlimited live AI Exam Countdown Strategies across every subject!`
+          : err.response?.data?.message ||
+            `⏳ **Live Study Plan AI servers are briefly busy** — no AI credit was deducted. Please close this dialog and click **AI Study Plan** again in a few seconds!`,
         loading: false,
       }));
     }

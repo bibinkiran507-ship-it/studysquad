@@ -653,6 +653,18 @@ export default function SquadRoomModal({
       setAiPoweredBy(res.data.poweredBy || 'Gemini AI');
     } catch (err) {
       console.error('Error suggesting goals:', err);
+      setAiCopilotResult({
+        title:
+          err.response?.status === 403
+            ? '👑 Daily Free AI Limit Reached (5/5)'
+            : '⏳ AI Study Goals Briefly Busy',
+        text:
+          err.response?.data?.message ||
+          (err.response?.status === 403
+            ? 'You have used your 5 free daily AI credits. Upgrade to StudySquad Pro (₹199/month) for unlimited AI study goals, tutor help, quizzes, and flashcards!'
+            : 'Live AI servers had a brief traffic spike (no AI credit was deducted). Please click AI Goals again in a moment!'),
+        poweredBy: 'System Notice',
+      });
     } finally {
       setIsSuggestingGoals(false);
     }
@@ -703,6 +715,13 @@ export default function SquadRoomModal({
         });
       } else {
         console.error('AI copilot error:', err);
+        setAiCopilotResult({
+          title: '⏳ Live AI Copilot Briefly Busy',
+          text:
+            err.response?.data?.message ||
+            'All live AI servers experienced a momentary spike — no AI credit was deducted. Please click again in a few seconds!',
+          poweredBy: 'System Notice',
+        });
       }
     } finally {
       setIsAiCopilotLoading(false);
@@ -1122,6 +1141,7 @@ export default function SquadRoomModal({
                     squad={effectiveSquad}
                     user={user}
                     socket={socket}
+                    openAuthModal={openAuthModal}
                   />
                 </Suspense>
               </div>

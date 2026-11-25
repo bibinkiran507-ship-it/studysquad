@@ -15,7 +15,6 @@ import LiveStudyToastContainer from './components/LiveStudyToast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useTypewriter } from './hooks/useTypewriter';
 import { squadsAPI, aiAPI, getSocketUrl } from './api/client';
-import { INITIAL_SQUADS } from './data/mockSquads';
 
 // Code-split heavy modals & full-screen auth view so the homepage loads instantaneously on mobile 4G/5G
 const SquadRoomModal = lazy(() => import('./components/SquadRoomModal'));
@@ -158,18 +157,20 @@ function AppInner() {
     }
   }, []);
 
-  // Fetch squads from Backend API
+  // Fetch real squads from PostgreSQL backend (with automatic 1.5s retry if server is waking up)
   const loadSquads = useCallback(async () => {
     try {
       const res = await squadsAPI.getAll();
-      if (res.data.squads && res.data.squads.length > 0) {
-        setSquads(res.data.squads);
-      } else {
-        setSquads(INITIAL_SQUADS);
-      }
+      setSquads(Array.isArray(res.data?.squads) ? res.data.squads : []);
     } catch (err) {
-      console.warn('Backend unavailable, fallback to initial mock squads:', err.message);
-      setSquads(INITIAL_SQUADS);
+      console.warn('Retrying squad directory load:', err.message);
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        const retryRes = await squadsAPI.getAll();
+        setSquads(Array.isArray(retryRes.data?.squads) ? retryRes.data.squads : []);
+      } catch (retryErr) {
+        console.error('Failed to fetch real squads from backend:', retryErr.message);
+      }
     } finally {
       setLoadingSquads(false);
     }

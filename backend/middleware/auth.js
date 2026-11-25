@@ -106,21 +106,6 @@ export const requireAuth = async (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
 
-  // Gracefully handle development or guest tokens ONLY outside production
-  if (
-    process.env.NODE_ENV !== 'production' &&
-    (token.startsWith('mock-') || token.startsWith('demo-'))
-  ) {
-    try {
-      const user = await withRetry(() => prisma.user.findFirst());
-      if (user) {
-        req.user = { ...user, isPro: resolveActivePro(user) };
-        return next();
-      }
-    } catch {}
-    return res.status(401).json({ error: 'Authentication required. Please log in.' });
-  }
-
   let decoded;
   try {
     decoded = jwt.verify(token, getJwtSecret());

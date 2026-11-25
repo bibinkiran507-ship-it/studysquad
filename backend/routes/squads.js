@@ -417,7 +417,12 @@ router.post('/:id/join', requireAuth, async (req, res) => {
       });
     }
 
-    if (squad.ownerId !== req.user.id && squad.members.length >= (squad.maxMembers || 100000)) {
+    // Public study squads welcome unlimited classmates (only enforce custom cap if explicitly > 50 and reached)
+    if (
+      squad.ownerId !== req.user.id &&
+      squad.maxMembers > 50 &&
+      squad.members.length >= squad.maxMembers
+    ) {
       return res.status(400).json({ error: 'This study squad is currently full.' });
     }
 

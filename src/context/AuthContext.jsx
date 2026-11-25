@@ -44,10 +44,7 @@ export const AuthProvider = ({ children }) => {
         }
       } catch (err) {
         console.warn('Backend profile sync notice:', err.message);
-        if (
-          err.response?.status === 401 &&
-          (!import.meta.env.DEV || !storedToken.startsWith('mock-'))
-        ) {
+        if (err.response?.status === 401) {
           localStorage.removeItem('studysquad_token');
           localStorage.removeItem('studysquad_user');
           setToken(null);
@@ -77,34 +74,11 @@ export const AuthProvider = ({ children }) => {
   };
 
   const loginWithGoogle = async (googleUserData) => {
-    try {
-      const res = await authAPI.googleLogin(googleUserData);
-      const { token: newToken, user: newUser } = res.data;
-      saveUserSession(newUser, newToken);
-      setIsAuthModalOpen(false);
-      return newUser;
-    } catch (err) {
-      if (!import.meta.env.DEV) {
-        throw err;
-      }
-      console.warn('Backend Google Auth failed, activating dev fallback session:', err);
-      const fallbackUser = {
-        id: `google-${Date.now()}`,
-        name: googleUserData.name || 'Google User',
-        email: googleUserData.email || 'student@studysquad.com',
-        avatar: googleUserData.avatar || `https://lh3.googleusercontent.com/a/default-user`,
-        bio: '',
-        pomodoroSessions: 0,
-        squadsJoined: 0,
-        isEmailVerified: true,
-        createdAt: new Date().toISOString(),
-        provider: 'google',
-      };
-      const fallbackToken = `mock-google-jwt-${Date.now()}`;
-      saveUserSession(fallbackUser, fallbackToken);
-      setIsAuthModalOpen(false);
-      return fallbackUser;
-    }
+    const res = await authAPI.googleLogin(googleUserData);
+    const { token: newToken, user: newUser } = res.data;
+    saveUserSession(newUser, newToken);
+    setIsAuthModalOpen(false);
+    return newUser;
   };
 
   const logout = () => {

@@ -778,6 +778,14 @@ server.listen(PORT, () => {
   console.log(`🚀 StudySquad Backend running on http://localhost:${PORT}`);
   console.log(`⚡ Socket.io ready for live study rooms`);
 
+  // Ensure all legacy seeded squads have open capacity (100,000) so real students never hit an old 6-member wall
+  prisma.squad
+    .updateMany({
+      where: { maxMembers: { lt: 1000 } },
+      data: { maxMembers: 100000 },
+    })
+    .catch(() => {});
+
   // Keep Render Free Tier awake 24/7 so Googlebot and students never hit a 50s cold-start delay
   if (process.env.NODE_ENV === 'production') {
     const KEEP_ALIVE_URL = 'https://studysquadai.com/api/health';

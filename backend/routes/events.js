@@ -370,25 +370,21 @@ Format cleanly with Markdown, emojis, and clear bullet points.`;
       });
     }
     res.locals.aiUsedFallback = true;
-
-    const fallbackPlan =
-      `📅 **${safeDays}-Day Exam Countdown Plan for ${examTitle || subject || 'Upcoming Exam'}**\n\n` +
-      `🎯 **Phase 1: Diagnostic & Core Concepts (Days 1-${Math.max(1, Math.floor(safeDays * 0.4))})**\n` +
-      `• Identify high-weight syllabus units and formula derivations.\n` +
-      `• Complete active recall flashcards on key definitions in the **AI Quiz & Cards** tab.\n\n` +
-      `🔥 **Phase 2: Intensive Problem Sets (Days ${Math.max(2, Math.floor(safeDays * 0.4) + 1)}-${Math.max(2, safeDays - 1)})**\n` +
-      `• Work through past exams under timed Pomodoro sprint conditions (25m deep work).\n` +
-      `• Host a peer whiteboard review session in your Squad Room to explain tricky concepts.\n\n` +
-      `🏆 **Phase 3: Final Polish (Day before Exam)**\n` +
-      `• Light formula sheet review and 8 hours of sleep to consolidate long-term memory!`;
-
-    return res.json({
-      plan: fallbackPlan,
-      poweredBy: 'StudySquad Smart Engine',
+    return res.status(503).json({
+      error: 'AI_TEMPORARILY_BUSY',
+      message:
+        'Live Study Plan AI servers had a brief spike — no AI credit was deducted. Please click AI Study Plan again in a few seconds!',
+      retryable: true,
     });
   } catch (err) {
     console.error('Error generating AI study plan:', err);
-    return res.status(500).json({ error: 'Failed to generate study plan.' });
+    res.locals.aiUsedFallback = true;
+    return res.status(503).json({
+      error: 'AI_TEMPORARILY_BUSY',
+      message:
+        'Live Study Plan AI servers had a brief spike — no AI credit was deducted. Please try again shortly!',
+      retryable: true,
+    });
   }
 });
 
