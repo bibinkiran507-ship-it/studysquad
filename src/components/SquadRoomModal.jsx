@@ -1120,7 +1120,7 @@ export default function SquadRoomModal({
           </div>
 
           {/* Modal Body */}
-          <div className="p-6 overflow-y-auto flex-1 space-y-6">
+          <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-6">
             {/* Persistent Whiteboard & Video Call containers so switching tabs never drops a live call or erases drawings */}
             {hasOpenedWhiteboard && (
               <div className={activeTab === 'whiteboard' ? 'block' : 'hidden'}>

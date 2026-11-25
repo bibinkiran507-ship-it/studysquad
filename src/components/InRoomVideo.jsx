@@ -1173,7 +1173,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
           ? 'fixed inset-0 z-[100] h-[100dvh] w-screen rounded-none border-0'
           : isNativeFullscreen
           ? 'h-screen w-screen rounded-none border-0'
-          : 'rounded-2xl border border-white/10 h-[calc(100dvh-180px)] sm:h-[clamp(350px,calc(92vh-205px),540px)]'
+          : 'rounded-2xl border border-white/10 h-[calc(100dvh-175px)] sm:h-[clamp(330px,calc(92vh-210px),520px)]'
       }`}
     >
       {/* Top Control Bar */}
@@ -1343,7 +1343,13 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
       )}
 
       {/* Main Video & Collaborative Whiteboard Stage */}
-      <div className="relative flex-1 min-h-0 bg-gradient-to-b from-neutral-950 via-neutral-900/90 to-black p-3 sm:p-4 overflow-y-auto flex flex-col">
+      <div
+        className={`relative flex-1 min-h-0 bg-gradient-to-b from-neutral-950 via-neutral-900/90 to-black flex flex-col ${
+          !inCall && !showWhiteboard
+            ? 'p-2.5 sm:p-3 overflow-y-auto sm:overflow-hidden justify-center'
+            : 'p-3 sm:p-4 overflow-y-auto'
+        }`}
+      >
         {/* Live Permission & Action Toast Notification */}
         {mediaToast && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 max-w-[92%] sm:max-w-lg">
@@ -1467,17 +1473,17 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
             )}
           </div>
         ) : !inCall ? (
-          /* Pre-Join Lobby (100% Native StudySquad WebRTC — Zero 3rd-party login or 5-min Jitsi cutoff!) */
-          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4 py-2 space-y-3 sm:space-y-3.5">
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/20 border border-emerald-500/35 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/10">
-              <Video className="w-6 h-6 sm:w-7 sm:h-7" />
+          /* Pre-Join Lobby (100% Native StudySquad WebRTC — Fits cleanly without scrolling on laptop screens) */
+          <div className="w-full max-w-2xl mx-auto px-3 sm:px-4 flex flex-col items-center justify-center text-center gap-2 sm:gap-2.5">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/20 border border-emerald-500/35 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/10 shrink-0">
+              <Video className="w-5 h-5" />
             </div>
 
-            <div className="space-y-1">
-              <h4 className="text-base sm:text-xl font-bold text-white">
+            <div className="space-y-0.5 max-w-xl">
+              <h4 className="text-sm sm:text-lg font-bold text-white leading-snug">
                 Study Together Live — {squad?.name}
               </h4>
-              <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
+              <p className="text-[11px] sm:text-xs text-neutral-400 leading-relaxed">
                 Instant peer-to-peer HD video, voice, live collaborative whiteboard, fullscreen view &amp; screen sharing inside your room.
               </p>
             </div>
@@ -1488,17 +1494,17 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
               {renderPermissionPill('Microphone', micPermission)}
             </div>
             {(camPermission === 'denied' || micPermission === 'denied') && (
-              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl max-w-md">
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-xl max-w-md">
                 Browser permission blocked: click the camera/lock icon in your address bar, select <strong>Allow</strong>, then click Join.
               </p>
             )}
 
-            <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 pt-0.5">
               <button
                 type="button"
                 disabled={isJoining}
                 onClick={() => handleJoinCall(true)}
-                className="px-5 py-2.5 sm:py-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-50"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-neutral-950 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-50"
               >
                 <PhoneCall className="w-4 h-4" />
                 <span>{isJoining ? 'Connecting...' : 'Join with Camera & Mic'}</span>
@@ -1508,7 +1514,7 @@ const InRoomVideo = memo(function InRoomVideo({ squad, user, socket, openAuthMod
                 type="button"
                 disabled={isJoining}
                 onClick={() => handleJoinCall(false)}
-                className="px-4 py-2.5 sm:py-3 rounded-2xl bg-white/10 hover:bg-white/15 text-white border border-white/15 font-bold text-xs sm:text-sm inline-flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 sm:py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white border border-white/15 font-bold text-xs sm:text-sm inline-flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
                 <Mic className="w-4 h-4 text-emerald-400" />
                 <span>Join Voice Only (Cam Off)</span>
